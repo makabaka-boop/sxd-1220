@@ -822,6 +822,68 @@ function buildLifecycleTimeline(batchId) {
           },
           status: 'completed'
         });
+      } else if (action.type === 'extension_applied') {
+        timeline.push({
+          type: 'retest_plan_extension_applied',
+          title: '延期申请已提交',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '责任人'} 提交了延期申请，申请从 ${action.prevPlanDate} 延期至 ${action.planDate}，延期原因: ${action.reason}`,
+          details: {
+            planId: plan.id,
+            applicant: action.handlerName,
+            applicantId: action.handlerId,
+            appliedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            prevPlanDate: action.prevPlanDate,
+            appliedNewDate: action.planDate,
+            extensionReason: action.reason,
+            remarks: action.remarks
+          },
+          status: 'pending'
+        });
+      } else if (action.type === 'extension_approved') {
+        timeline.push({
+          type: 'retest_plan_extension_approved',
+          title: '延期申请已通过',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '审批人'} 同意了延期申请，复测计划从 ${action.prevPlanDate} 延期至 ${action.planDate}，延期原因: ${action.reason}`,
+          details: {
+            planId: plan.id,
+            approvedBy: action.handlerName,
+            approvedById: action.handlerId,
+            approvedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            prevPlanDate: action.prevPlanDate,
+            newPlanDate: action.planDate,
+            extensionReason: action.reason,
+            remarks: action.remarks,
+            applicant: action.applicantName,
+            applicantId: action.applicantId
+          },
+          status: 'completed'
+        });
+      } else if (action.type === 'extension_rejected') {
+        timeline.push({
+          type: 'retest_plan_extension_rejected',
+          title: '延期申请已驳回',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '审批人'} 驳回了延期申请，驳回原因: ${action.remarks || '未说明'}，原计划日期: ${action.prevPlanDate}`,
+          details: {
+            planId: plan.id,
+            rejectedBy: action.handlerName,
+            rejectedById: action.handlerId,
+            rejectedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            toStatus: action.toStatus,
+            prevPlanDate: action.prevPlanDate,
+            appliedNewDate: action.planDate,
+            extensionReason: action.reason,
+            rejectReason: action.remarks,
+            applicant: action.applicantName,
+            applicantId: action.applicantId
+          },
+          status: 'rejected'
+        });
       } else if (action.type === 'completed') {
         timeline.push({
           type: 'retest_plan_completed',
@@ -855,10 +917,13 @@ function buildLifecycleTimeline(batchId) {
       review: 4, 
       retest_plan_created: 5,
       retest_plan_confirmed: 6,
-      retest_plan_extended: 7,
-      retest_plan_completed: 8,
-      status: 9, 
-      scheduled: 10 
+      retest_plan_extension_applied: 7,
+      retest_plan_extension_approved: 8,
+      retest_plan_extension_rejected: 9,
+      retest_plan_extended: 10,
+      retest_plan_completed: 11,
+      status: 12, 
+      scheduled: 13 
     };
     return (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99);
   });
@@ -917,10 +982,22 @@ function getPendingBatches(filters = {}) {
         p.status === RETEST_PLAN_STATUS.PENDING 
         || p.status === RETEST_PLAN_STATUS.CONFIRMED 
         || p.status === RETEST_PLAN_STATUS.EXTENDED
+        || p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL
       );
       if (!activePlan) return false;
+      if (activePlan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+        return filters.retestCategory === '待延期审批';
+      }
       const category = categorizeRetestPlan(activePlan);
       return category === filters.retestCategory;
+    });
+  }
+
+  if (filters.hasPendingExtensionApproval === 'true') {
+    results = results.filter(b => {
+      const plans = getRetestPlansByBatch(b.id);
+      const { RETEST_PLAN_STATUS } = require('../config');
+      return plans.some(p => p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL);
     });
   }
 
@@ -966,13 +1043,20 @@ function getPendingBatches(filters = {}) {
   const retestCategoryGroups = {
     [RETEST_PLAN_CATEGORY.OVERDUE]: 0,
     [RETEST_PLAN_CATEGORY.UPCOMING]: 0,
-    [RETEST_PLAN_CATEGORY.NORMAL]: 0
+    [RETEST_PLAN_CATEGORY.NORMAL]: 0,
+    '待延期审批': 0
   };
   enrichedResults.forEach(b => {
-    if (b.retestPlan && b.retestPlan.category) {
+    if (b.retestPlan && b.retestPlan.isPendingApproval) {
+      retestCategoryGroups['待延期审批']++;
+    } else if (b.retestPlan && b.retestPlan.category) {
       retestCategoryGroups[b.retestPlan.category]++;
     }
   });
+
+  const pendingApprovalCount = enrichedResults.filter(b => 
+    b.retestPlan && b.retestPlan.isPendingApproval
+  ).length;
 
   return {
     total: enrichedResults.length,
@@ -981,7 +1065,8 @@ function getPendingBatches(filters = {}) {
     riskDistribution: riskGroups,
     retestCategoryDistribution: retestCategoryGroups,
     overdueCount: enrichedResults.filter(b => b.retestStatus.isOverdue).length,
-    unreviewedAbnormalCount: enrichedResults.filter(b => b.unresolvedAbnormalCount > 0).length
+    unreviewedAbnormalCount: enrichedResults.filter(b => b.unresolvedAbnormalCount > 0).length,
+    pendingExtensionApprovalCount: pendingApprovalCount
   };
 }
 
@@ -1006,6 +1091,7 @@ function getBatchClosureOverview() {
         suspended: 0,
         overdueRetestCount: 0,
         unreviewedAbnormalCount: 0,
+        pendingExtensionApprovalCount: 0,
         highRiskPackagingBatchCount: 0,
         highRiskBatches: []
       };
@@ -1049,6 +1135,10 @@ function getBatchClosureOverview() {
       overview[rpId].unreviewedAbnormalCount++;
     }
 
+    if (enriched.retestPlan && enriched.retestPlan.isPendingApproval) {
+      overview[rpId].pendingExtensionApprovalCount++;
+    }
+
     if (enriched.riskAssessment.riskScore >= 4) {
       overview[rpId].highRiskPackagingBatchCount++;
       overview[rpId].highRiskBatches.push({
@@ -1078,6 +1168,7 @@ function getBatchClosureOverview() {
     totalPending: result.reduce((sum, r) => sum + r.pendingCount, 0),
     totalOverdue: result.reduce((sum, r) => sum + r.overdueRetestCount, 0),
     totalUnreviewedAbnormal: result.reduce((sum, r) => sum + r.unreviewedAbnormalCount, 0),
+    totalPendingExtensionApproval: result.reduce((sum, r) => sum + r.pendingExtensionApprovalCount, 0),
     totalHighRiskBatches: result.reduce((sum, r) => sum + r.highRiskPackagingBatchCount, 0)
   };
 
@@ -1108,6 +1199,7 @@ function generateDashboardExportData() {
       pendingRetestCount: retestStat ? retestStat.pendingRetestCount : 0,
       retestOverdueCount: retestStat ? retestStat.overdueCount : 0,
       retestExtendedCount: retestStat ? retestStat.extendedCount : 0,
+      retestPendingApprovalCount: retestStat ? retestStat.pendingApprovalCount : 0,
       retestCompletedCount: retestStat ? retestStat.completedCount : 0,
       totalRetestPlanCount: retestStat ? retestStat.totalPlanCount : 0
     };
@@ -1121,7 +1213,8 @@ function generateDashboardExportData() {
         ...closureOverview.summary,
         totalPendingRetest: retestPlanStats.reduce((sum, r) => sum + r.pendingRetestCount, 0),
         totalRetestOverdue: retestPlanStats.reduce((sum, r) => sum + r.overdueCount, 0),
-        totalRetestExtended: retestPlanStats.reduce((sum, r) => sum + r.extendedCount, 0)
+        totalRetestExtended: retestPlanStats.reduce((sum, r) => sum + r.extendedCount, 0),
+        totalRetestPendingApproval: retestPlanStats.reduce((sum, r) => sum + r.pendingApprovalCount, 0)
       },
       byResponsiblePerson: mergedClosure
     },
@@ -1134,6 +1227,7 @@ function generateDashboardExportData() {
       retestCategoryDistribution: pendingBatches.retestCategoryDistribution,
       overdueCount: pendingBatches.overdueCount,
       unreviewedAbnormalCount: pendingBatches.unreviewedAbnormalCount,
+      pendingExtensionApprovalCount: pendingBatches.pendingExtensionApprovalCount,
       batches: pendingBatches.data.map(b => ({
         id: b.id,
         batchNumber: b.batchNumber,
@@ -1148,12 +1242,19 @@ function generateDashboardExportData() {
         currentActionPriority: b.currentAction.priority,
         retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
         retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+        retestIsPendingApproval: b.retestPlan ? b.retestPlan.isPendingApproval : false,
         retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
         retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+        retestPendingExtensionNewDate: b.retestPlan ? b.retestPlan.pendingExtensionNewDate : '',
+        retestPendingExtensionReason: b.retestPlan ? b.retestPlan.pendingExtensionReason : '',
+        retestPendingExtensionApplicant: b.retestPlan ? b.retestPlan.pendingExtensionApplicantName : '',
+        retestPendingExtensionAppliedAt: b.retestPlan ? b.retestPlan.pendingExtensionAppliedAt : '',
         retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
         retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
         retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
-        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
+        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : '',
+        retestApprovalRemarks: b.retestPlan ? b.retestPlan.approvalRemarks : '',
+        retestRejectReason: b.retestPlan ? b.retestPlan.rejectReason : ''
       }))
     },
     highRiskPackaging: highRiskPackaging.slice(0, 10),
@@ -1208,7 +1309,7 @@ function createRetestPlan(batch, sourceType, sourceRecordId, baseDateStr, handle
 
   const existingPending = store.retestPlans.find(
     p => p.trialBatchId === batch.id 
-      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED)
+      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED || p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL)
   );
   if (existingPending) {
     return existingPending;
@@ -1360,11 +1461,177 @@ function extendRetestPlan(planId, newPlanDate, extensionReason, handlerId, handl
   return { success: true, data: plan };
 }
 
+function submitExtensionApproval(planId, newPlanDate, extensionReason, applicantId, applicantName, remarks = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return { success: false, message: '复测计划不存在' };
+
+  if (plan.status === RETEST_PLAN_STATUS.COMPLETED || plan.status === RETEST_PLAN_STATUS.CANCELLED) {
+    return { success: false, message: '该复测计划已完成或已取消，不可申请延期' };
+  }
+
+  if (plan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+    return { success: false, message: '该复测计划已处于待延期审批状态，请勿重复提交' };
+  }
+
+  if (!newPlanDate) return { success: false, message: '新的计划日期不能为空' };
+  if (!extensionReason || extensionReason.trim() === '') {
+    return { success: false, message: '延期原因不能为空' };
+  }
+
+  const newDate = new Date(newPlanDate);
+  const currentDate = new Date(plan.currentPlanDate);
+  if (newDate <= currentDate) {
+    return { success: false, message: '新的计划日期必须晚于当前计划日期' };
+  }
+
+  const now = new Date().toISOString();
+  const prevStatus = plan.status;
+  const prevPlanDate = plan.currentPlanDate;
+  plan.status = RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL;
+  plan.pendingExtensionNewDate = newPlanDate;
+  plan.pendingExtensionReason = extensionReason;
+  plan.pendingExtensionApplicantId = applicantId;
+  plan.pendingExtensionApplicantName = applicantName;
+  plan.pendingExtensionAppliedAt = now;
+  plan.lastHandlerId = applicantId;
+  plan.lastHandlerName = applicantName;
+  plan.lastHandledAt = now;
+  if (remarks) plan.remarks = remarks;
+  if (!plan.actions) plan.actions = [];
+  plan.actions.push({
+    type: 'extension_applied',
+    handlerId: applicantId,
+    handlerName: applicantName,
+    handledAt: now,
+    fromStatus: prevStatus,
+    toStatus: RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL,
+    prevPlanDate: prevPlanDate,
+    planDate: newPlanDate,
+    reason: extensionReason,
+    remarks: remarks || ''
+  });
+
+  return { success: true, data: plan };
+}
+
+function approveExtension(planId, approverId, approverName, approvalRemarks = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return { success: false, message: '复测计划不存在' };
+
+  if (plan.status !== RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+    return { success: false, message: '该复测计划不处于待延期审批状态，无法审批' };
+  }
+
+  if (!plan.pendingExtensionNewDate || !plan.pendingExtensionReason) {
+    return { success: false, message: '延期申请数据不完整' };
+  }
+
+  const now = new Date().toISOString();
+  const prevStatus = plan.status;
+  const prevPlanDate = plan.currentPlanDate;
+  const newPlanDate = plan.pendingExtensionNewDate;
+  const extensionReason = plan.pendingExtensionReason;
+  const applicantId = plan.pendingExtensionApplicantId;
+  const applicantName = plan.pendingExtensionApplicantName;
+
+  plan.status = RETEST_PLAN_STATUS.EXTENDED;
+  plan.currentPlanDate = newPlanDate;
+  plan.extensionCount = (plan.extensionCount || 0) + 1;
+  plan.extensionReason = extensionReason;
+  plan.lastHandlerId = approverId;
+  plan.lastHandlerName = approverName;
+  plan.lastHandledAt = now;
+  if (approvalRemarks) plan.approvalRemarks = approvalRemarks;
+
+  plan.pendingExtensionNewDate = null;
+  plan.pendingExtensionReason = null;
+  plan.pendingExtensionApplicantId = null;
+  plan.pendingExtensionApplicantName = null;
+  plan.pendingExtensionAppliedAt = null;
+
+  if (!plan.actions) plan.actions = [];
+  plan.actions.push({
+    type: 'extension_approved',
+    handlerId: approverId,
+    handlerName: approverName,
+    handledAt: now,
+    fromStatus: prevStatus,
+    toStatus: RETEST_PLAN_STATUS.EXTENDED,
+    prevPlanDate: prevPlanDate,
+    planDate: newPlanDate,
+    reason: extensionReason,
+    remarks: approvalRemarks || '',
+    applicantId: applicantId,
+    applicantName: applicantName
+  });
+
+  return { success: true, data: plan };
+}
+
+function rejectExtension(planId, rejecterId, rejecterName, rejectReason = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return { success: false, message: '复测计划不存在' };
+
+  if (plan.status !== RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+    return { success: false, message: '该复测计划不处于待延期审批状态，无法驳回' };
+  }
+
+  const now = new Date().toISOString();
+  const prevStatus = plan.status;
+  const prevPlanDate = plan.currentPlanDate;
+  const appliedNewDate = plan.pendingExtensionNewDate;
+  const appliedReason = plan.pendingExtensionReason;
+  const applicantId = plan.pendingExtensionApplicantId;
+  const applicantName = plan.pendingExtensionApplicantName;
+
+  let originalStatus = RETEST_PLAN_STATUS.PENDING;
+  const prevActions = (plan.actions || []).filter(a => a.type !== 'extension_applied');
+  if (prevActions.length > 0) {
+    const lastAction = prevActions[prevActions.length - 1];
+    if (lastAction.toStatus && lastAction.toStatus !== RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+      originalStatus = lastAction.toStatus;
+    }
+  }
+
+  plan.status = originalStatus;
+  plan.lastHandlerId = rejecterId;
+  plan.lastHandlerName = rejecterName;
+  plan.lastHandledAt = now;
+  if (rejectReason) plan.rejectReason = rejectReason;
+
+  plan.pendingExtensionNewDate = null;
+  plan.pendingExtensionReason = null;
+  plan.pendingExtensionApplicantId = null;
+  plan.pendingExtensionApplicantName = null;
+  plan.pendingExtensionAppliedAt = null;
+
+  if (!plan.actions) plan.actions = [];
+  plan.actions.push({
+    type: 'extension_rejected',
+    handlerId: rejecterId,
+    handlerName: rejecterName,
+    handledAt: now,
+    fromStatus: prevStatus,
+    toStatus: originalStatus,
+    prevPlanDate: prevPlanDate,
+    planDate: appliedNewDate,
+    reason: appliedReason,
+    remarks: rejectReason || '',
+    applicantId: applicantId,
+    applicantName: applicantName
+  });
+
+  return { success: true, data: plan };
+}
+
 function completeRetestPlan(batchId, handlerId, handlerName, remarks = '') {
   const { RETEST_PLAN_STATUS } = require('../config');
   const activePlans = store.retestPlans.filter(
     p => p.trialBatchId === batchId 
-      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED)
+      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED || p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL)
   );
 
   const now = new Date().toISOString();
@@ -1400,7 +1667,8 @@ function getRetestPlanCategoryStats() {
     [RETEST_PLAN_CATEGORY.NORMAL]: 0,
     total: 0,
     completed: 0,
-    extended: 0
+    extended: 0,
+    pendingApproval: 0
   };
 
   store.retestPlans.forEach(plan => {
@@ -1410,6 +1678,11 @@ function getRetestPlanCategoryStats() {
     }
     if (plan.status === RETEST_PLAN_STATUS.EXTENDED) {
       stats.extended++;
+    }
+    if (plan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+      stats.pendingApproval++;
+      stats.total++;
+      return;
     }
     const category = categorizeRetestPlan(plan);
     if (category) {
@@ -1428,6 +1701,7 @@ function enrichTrialBatchWithRetestPlan(batch) {
     p.status === RETEST_PLAN_STATUS.PENDING 
       || p.status === RETEST_PLAN_STATUS.CONFIRMED 
       || p.status === RETEST_PLAN_STATUS.EXTENDED
+      || p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL
   );
 
   const targetPlan = activePlan || allPlans[0] || null;
@@ -1435,6 +1709,7 @@ function enrichTrialBatchWithRetestPlan(batch) {
   let retestPlanInfo = null;
   if (targetPlan) {
     const isActive = !!activePlan;
+    const isPendingApproval = targetPlan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL;
     const category = isActive ? categorizeRetestPlan(targetPlan) : null;
     const now = new Date();
     const planDate = new Date(targetPlan.currentPlanDate);
@@ -1445,8 +1720,14 @@ function enrichTrialBatchWithRetestPlan(batch) {
       status: targetPlan.status,
       category: category,
       isActive,
+      isPendingApproval,
       originalPlanDate: targetPlan.originalPlanDate,
       currentPlanDate: targetPlan.currentPlanDate,
+      pendingExtensionNewDate: targetPlan.pendingExtensionNewDate || null,
+      pendingExtensionReason: targetPlan.pendingExtensionReason || null,
+      pendingExtensionApplicantId: targetPlan.pendingExtensionApplicantId || null,
+      pendingExtensionApplicantName: targetPlan.pendingExtensionApplicantName || null,
+      pendingExtensionAppliedAt: targetPlan.pendingExtensionAppliedAt || null,
       extensionCount: targetPlan.extensionCount,
       extensionReason: targetPlan.extensionReason,
       lastHandlerId: targetPlan.lastHandlerId,
@@ -1457,6 +1738,8 @@ function enrichTrialBatchWithRetestPlan(batch) {
       sourceType: targetPlan.sourceType,
       sourceRecordId: targetPlan.sourceRecordId,
       remarks: targetPlan.remarks,
+      approvalRemarks: targetPlan.approvalRemarks || null,
+      rejectReason: targetPlan.rejectReason || null,
       actions: targetPlan.actions || []
     };
   }
@@ -1484,6 +1767,7 @@ function getRetestPlanStatsByResponsiblePerson() {
         overdueCount: 0,
         extendedCount: 0,
         completedCount: 0,
+        pendingApprovalCount: 0,
         totalPlanCount: 0,
         batches: []
       };
@@ -1497,6 +1781,10 @@ function getRetestPlanStatsByResponsiblePerson() {
         stats[rpId].completedCount++;
       } else if (plan.status === RETEST_PLAN_STATUS.EXTENDED) {
         stats[rpId].extendedCount++;
+      } else if (plan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL) {
+        stats[rpId].pendingApprovalCount++;
+        stats[rpId].pendingRetestCount++;
+        return;
       }
       
       const category = categorizeRetestPlan(plan);
@@ -1541,6 +1829,9 @@ module.exports = {
   categorizeRetestPlan,
   confirmRetestPlan,
   extendRetestPlan,
+  submitExtensionApproval,
+  approveExtension,
+  rejectExtension,
   completeRetestPlan,
   getRetestPlanCategoryStats,
   enrichTrialBatchWithRetestPlan,

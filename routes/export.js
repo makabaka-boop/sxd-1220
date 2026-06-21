@@ -40,18 +40,28 @@ router.get('/export/csv', authenticate, (req, res) => {
       const batches = filterTrialBatches(req.query);
       const headers = ['id', 'formulaCode', 'batchNumber', 'packagingTypeName', 'observationConditionName', 
         'responsiblePersonName', 'productionDate', 'status', 'experimentRecordCount', 'reviewRecordCount', 
-        'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate', 
-        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt', 'createdAt'];
+        'retestPlanStatus', 'retestPlanCategory', 'retestIsPendingApproval', 'retestOriginalPlanDate', 
+        'retestCurrentPlanDate', 'retestPendingExtensionNewDate', 'retestPendingExtensionReason', 
+        'retestPendingExtensionApplicant', 'retestPendingExtensionAppliedAt', 
+        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt', 
+        'retestApprovalRemarks', 'retestRejectReason', 'createdAt'];
       const enrichedData = batches.map(b => ({
         ...b,
         retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
         retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+        retestIsPendingApproval: b.retestPlan ? (b.retestPlan.isPendingApproval ? '是' : '否') : '否',
         retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
         retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+        retestPendingExtensionNewDate: b.retestPlan ? b.retestPlan.pendingExtensionNewDate || '' : '',
+        retestPendingExtensionReason: b.retestPlan ? b.retestPlan.pendingExtensionReason || '' : '',
+        retestPendingExtensionApplicant: b.retestPlan ? b.retestPlan.pendingExtensionApplicantName || '' : '',
+        retestPendingExtensionAppliedAt: b.retestPlan ? b.retestPlan.pendingExtensionAppliedAt || '' : '',
         retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
         retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
         retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
-        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
+        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : '',
+        retestApprovalRemarks: b.retestPlan ? b.retestPlan.approvalRemarks || '' : '',
+        retestRejectReason: b.retestPlan ? b.retestPlan.rejectReason || '' : ''
       }));
       csvContent = convertToCSV(enrichedData, headers);
       fileName = `trial-batches-${date}.csv`;
@@ -101,29 +111,41 @@ router.get('/export/csv', authenticate, (req, res) => {
       const headers = ['trialBatchId', 'batchNumber', 'formulaCode', 'packagingTypeName', 
         'observationConditionName', 'responsiblePersonName', 'status', 'retestCycleName', 'intervalDays',
         'lastRecordDate', 'scheduledRetestDate', 'daysUntilDue', 'isOverdue', 'overdueDays', 'isUrgent',
-        'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate',
-        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt'];
+        'retestPlanStatus', 'retestPlanCategory', 'retestIsPendingApproval', 'retestOriginalPlanDate', 
+        'retestCurrentPlanDate', 'retestPendingExtensionNewDate', 'retestPendingExtensionReason',
+        'retestPendingExtensionApplicant', 'retestPendingExtensionAppliedAt',
+        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt',
+        'retestApprovalRemarks', 'retestRejectReason'];
       const enrichedData = data.map(d => {
         const plans = getRetestPlansByBatch(d.trialBatchId);
         const activePlan = plans.find(p => {
           const { RETEST_PLAN_STATUS } = require('../config');
           return p.status === RETEST_PLAN_STATUS.PENDING 
             || p.status === RETEST_PLAN_STATUS.CONFIRMED 
-            || p.status === RETEST_PLAN_STATUS.EXTENDED;
+            || p.status === RETEST_PLAN_STATUS.EXTENDED
+            || p.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL;
         });
+        const isPendingApproval = activePlan ? activePlan.status === RETEST_PLAN_STATUS.PENDING_EXTENSION_APPROVAL : false;
         return {
           ...d,
           retestPlanStatus: activePlan ? activePlan.status : '',
-          retestPlanCategory: activePlan ? (() => {
+          retestPlanCategory: activePlan && !isPendingApproval ? (() => {
             const { categorizeRetestPlan } = require('../utils/analytics');
             return categorizeRetestPlan(activePlan) || '';
           })() : '',
+          retestIsPendingApproval: isPendingApproval ? '是' : '否',
           retestOriginalPlanDate: activePlan ? activePlan.originalPlanDate : '',
           retestCurrentPlanDate: activePlan ? activePlan.currentPlanDate : '',
+          retestPendingExtensionNewDate: activePlan ? activePlan.pendingExtensionNewDate || '' : '',
+          retestPendingExtensionReason: activePlan ? activePlan.pendingExtensionReason || '' : '',
+          retestPendingExtensionApplicant: activePlan ? activePlan.pendingExtensionApplicantName || '' : '',
+          retestPendingExtensionAppliedAt: activePlan ? activePlan.pendingExtensionAppliedAt || '' : '',
           retestExtensionCount: activePlan ? activePlan.extensionCount : 0,
           retestExtensionReason: activePlan ? activePlan.extensionReason : '',
           retestLastHandlerName: activePlan ? activePlan.lastHandlerName : '',
-          retestLastHandledAt: activePlan ? activePlan.lastHandledAt : ''
+          retestLastHandledAt: activePlan ? activePlan.lastHandledAt : '',
+          retestApprovalRemarks: activePlan ? activePlan.approvalRemarks || '' : '',
+          retestRejectReason: activePlan ? activePlan.rejectReason || '' : ''
         };
       });
       csvContent = convertToCSV(enrichedData, headers);
@@ -195,16 +217,17 @@ router.get('/export/dashboard/csv', authenticate, (req, res) => {
       retestPendingCount: retestStat ? retestStat.pendingRetestCount : 0,
       retestOverdueCount: retestStat ? retestStat.overdueCount : 0,
       retestExtendedCount: retestStat ? retestStat.extendedCount : 0,
+      retestPendingApprovalCount: retestStat ? retestStat.pendingApprovalCount : 0,
       retestCompletedCount: retestStat ? retestStat.completedCount : 0
     };
     });
     const headers = ['责任人', '总批次数', '待处理数', '待制样', '观察中', '待复测', '异常跟进', 
       '可放大', '暂停', '复测超期数', '异常未复核数', '高风险批次数', '闭环率',
-      '复测计划待处理数', '复测计划超期数', '复测计划延期数', '复测计划完成数'];
+      '复测计划待处理数', '复测计划超期数', '复测计划延期数', '待延期审批数', '复测计划完成数'];
     const cnHeaders = ['responsiblePersonName', 'totalBatches', 'pendingCount', 'pendingPrep', 
       'observing', 'pendingRetest', 'abnormalFollowup', 'readyScaleup', 'suspended', 
       'overdueRetestCount', 'unreviewedAbnormalCount', 'highRiskPackagingBatchCount', 'closureRate',
-      'retestPendingCount', 'retestOverdueCount', 'retestExtendedCount', 'retestCompletedCount'];
+      'retestPendingCount', 'retestOverdueCount', 'retestExtendedCount', 'retestPendingApprovalCount', 'retestCompletedCount'];
     const renamedData = data.map(item => {
       const renamed = {};
       cnHeaders.forEach((h, i) => { renamed[headers[i]] = item[h]; });
@@ -230,21 +253,35 @@ router.get('/export/dashboard/csv', authenticate, (req, res) => {
       priority: b.currentAction.priority,
       retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
       retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+      retestIsPendingApproval: b.retestPlan ? (b.retestPlan.isPendingApproval ? '是' : '否') : '否',
       retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
       retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+      retestPendingExtensionNewDate: b.retestPlan ? b.retestPlan.pendingExtensionNewDate || '' : '',
+      retestPendingExtensionReason: b.retestPlan ? b.retestPlan.pendingExtensionReason || '' : '',
+      retestPendingExtensionApplicant: b.retestPlan ? b.retestPlan.pendingExtensionApplicantName || '' : '',
+      retestPendingExtensionAppliedAt: b.retestPlan ? b.retestPlan.pendingExtensionAppliedAt || '' : '',
       retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
       retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
       retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
-      retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
+      retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : '',
+      retestApprovalRemarks: b.retestPlan ? b.retestPlan.approvalRemarks || '' : '',
+      retestRejectReason: b.retestPlan ? b.retestPlan.rejectReason || '' : ''
     }));
     const headers = ['试制批号', '配方', '包材类型', '观察条件', '责任人', '当前状态', 
       '下次复测日期', '是否超期', '超期天数', '风险等级', '当前处理动作', '优先级',
-      '复测计划状态', '复测分类', '原计划日期', '当前计划日期', '延期次数', '延期原因', '最近处理人', '最近处理时间'];
+      '复测计划状态', '复测分类', '是否待延期审批', '原计划日期', '当前计划日期', 
+      '申请延期日期', '延期原因', '申请人', '申请时间',
+      '延期次数', '历史延期原因', '最近处理人', '最近处理时间',
+      '审批备注', '驳回原因'];
     const cnKeys = ['batchNumber', 'formulaCode', 'packagingTypeName', 'observationConditionName',
       'responsiblePersonName', 'status', 'nextRetestDate', 'isOverdue', 'overdueDays',
       'riskLevel', 'currentAction', 'priority',
-      'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate',
-      'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt'];
+      'retestPlanStatus', 'retestPlanCategory', 'retestIsPendingApproval',
+      'retestOriginalPlanDate', 'retestCurrentPlanDate',
+      'retestPendingExtensionNewDate', 'retestPendingExtensionReason',
+      'retestPendingExtensionApplicant', 'retestPendingExtensionAppliedAt',
+      'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt',
+      'retestApprovalRemarks', 'retestRejectReason'];
     const renamedData = data.map(item => {
       const renamed = {};
       cnKeys.forEach((k, i) => { renamed[headers[i]] = item[k]; });

@@ -46,7 +46,10 @@ app.get('/', (req, res) => {
         pendingBatches: 'GET /api/pending-batches (待处理批次，支持多维度筛选，支持按复测状态筛选: retestCategory=已超期/临近到期/正常待复测)',
         retestPlans: 'GET /api/trial-batches/:id/retest-plans (获取批次复测计划历史)',
         confirmRetestPlan: 'POST /api/retest-plans/:planId/confirm (确认复测计划)',
-        extendRetestPlan: 'POST /api/retest-plans/:planId/extend (延期复测计划)',
+        extendRetestPlan: 'POST /api/retest-plans/:planId/extend (直接延期复测计划-管理员/责任人)',
+        submitExtensionApproval: 'POST /api/retest-plans/:planId/submit-extension-approval (提交延期申请-责任人)',
+        approveExtension: 'POST /api/retest-plans/:planId/approve-extension (审批通过延期申请-复核员/管理员)',
+        rejectExtension: 'POST /api/retest-plans/:planId/reject-extension (审批驳回延期申请-复核员/管理员)',
         retestPlanStats: 'GET /api/retest-plan-stats (复测计划分类统计)'
       },
       experiment: {

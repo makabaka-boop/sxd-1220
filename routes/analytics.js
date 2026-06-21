@@ -115,6 +115,7 @@ router.get('/batch-tracking-dashboard', authenticate, (req, res) => {
       pendingRetestCount: retestStat ? retestStat.pendingRetestCount : 0,
       retestOverdueCount: retestStat ? retestStat.overdueCount : 0,
       retestExtendedCount: retestStat ? retestStat.extendedCount : 0,
+      retestPendingApprovalCount: retestStat ? retestStat.pendingApprovalCount : 0,
       retestCompletedCount: retestStat ? retestStat.completedCount : 0,
       totalRetestPlanCount: retestStat ? retestStat.totalPlanCount : 0
     };
@@ -125,7 +126,8 @@ router.get('/batch-tracking-dashboard', authenticate, (req, res) => {
       ...closureOverview.summary,
       totalPendingRetest: retestPlanStats.reduce((sum, r) => sum + r.pendingRetestCount, 0),
       totalRetestOverdue: retestPlanStats.reduce((sum, r) => sum + r.overdueCount, 0),
-      totalRetestExtended: retestPlanStats.reduce((sum, r) => sum + r.extendedCount, 0)
+      totalRetestExtended: retestPlanStats.reduce((sum, r) => sum + r.extendedCount, 0),
+      totalRetestPendingApproval: retestPlanStats.reduce((sum, r) => sum + r.pendingApprovalCount, 0)
     },
     closureOverview: mergedClosure,
     retestPlanStats: retestCategoryStats,
@@ -137,6 +139,7 @@ router.get('/batch-tracking-dashboard', authenticate, (req, res) => {
       retestCategoryDistribution: pendingBatches.retestCategoryDistribution,
       overdueCount: pendingBatches.overdueCount,
       unreviewedAbnormalCount: pendingBatches.unreviewedAbnormalCount,
+      pendingExtensionApprovalCount: pendingBatches.pendingExtensionApprovalCount,
       data: pendingBatches.data.slice(0, 50)
     },
     alerts: {
@@ -146,7 +149,8 @@ router.get('/batch-tracking-dashboard', authenticate, (req, res) => {
       abnormalNoConclusion: validations.abnormalWithoutConclusion.detected ? validations.abnormalWithoutConclusion.pendingConclusion.length : 0,
       responsibleBacklog: validations.responsibleBacklog.detected ? validations.responsibleBacklog.backlogResponsibles.length : 0,
       retestPlanOverdue: retestCategoryStats['已超期'] || 0,
-      retestPlanUpcoming: retestCategoryStats['临近到期'] || 0
+      retestPlanUpcoming: retestCategoryStats['临近到期'] || 0,
+      retestPlanPendingApproval: retestCategoryStats.pendingApproval || 0
     }
   });
 });
@@ -202,7 +206,8 @@ router.get('/dashboard', authenticate, (req, res) => {
       pendingRetestCount: pendingRetest.filter(r => r.isOverdue || r.isUrgent).length,
       retestPlanOverdue: retestPlanStats['已超期'] || 0,
       retestPlanUpcoming: retestPlanStats['临近到期'] || 0,
-      retestPlanExtended: retestPlanStats.extended || 0
+      retestPlanExtended: retestPlanStats.extended || 0,
+      retestPlanPendingApproval: retestPlanStats.pendingApproval || 0
     },
     topHighRiskPackaging: getHighRiskPackaging().slice(0, 5),
     urgentPendingRetest: pendingRetest.slice(0, 10)

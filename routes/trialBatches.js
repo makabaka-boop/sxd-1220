@@ -1,9 +1,9 @@
 const express = require('express');
 const store = require('../data/store');
-const { authenticate, requireAdmin } = require('../middleware/auth');
+const { authenticate, requireAdmin, requireReviewer } = require('../middleware/auth');
 const { STATUS, ABNORMAL_LEVELS, RETEST_PLAN_STATUS } = require('../config');
 const { validateDuplicateTrialBatch } = require('../utils/validators');
-const { filterTrialBatches, enrichTrialBatch, buildLifecycleTimeline, getPendingBatches, createRetestPlan, getRetestPlansByBatch, confirmRetestPlan, extendRetestPlan, completeRetestPlan, getRetestPlanCategoryStats } = require('../utils/analytics');
+const { filterTrialBatches, enrichTrialBatch, buildLifecycleTimeline, getPendingBatches, createRetestPlan, getRetestPlansByBatch, confirmRetestPlan, extendRetestPlan, submitExtensionApproval, approveExtension, rejectExtension, completeRetestPlan, getRetestPlanCategoryStats } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -295,6 +295,112 @@ router.post('/retest-plans/:planId/extend', authenticate, (req, res) => {
   }
 
   res.json(result.data);
+});
+
+router.post('/retest-plans/:planId/submit-extension-approval', authenticate, (req, res) => {
+  const planId = parseInt(req.params.planId);
+  const { newPlanDate, extensionReason, remarks } = req.body;
+
+  if (!newPlanDate) {
+    return res.status(400).json({ message: '新的计划日期不能为空' });
+  }
+  if (!extensionReason || extensionReason.trim() === '') {
+    return res.status(400).json({ message: '延期原因不能为空' });
+  }
+
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ message: '复测计划不存在' });
+
+  const batch = store.trialBatches.find(b => b.id === plan.trialBatchId);
+  if (!batch) return res.status(404).json({ message: '关联的试制批号不存在' });
+
+  const rp = store.responsiblePersons.find(r => r.id === batch.responsiblePersonId);
+  const isAdmin = req.user.role === 'admin';
+  if (!isAdmin && (!rp || rp.userId !== req.user.id)) {
+    return res.status(403).json({ message: '权限不足，只有该批次责任人或管理员可提交延期申请' });
+  }
+
+  const handler = store.users.find(u => u.id === req.user.id);
+  const result = submitExtensionApproval(
+    planId,
+    newPlanDate,
+    extensionReason,
+    req.user.id,
+    handler ? handler.name : '',
+    remarks || ''
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ message: result.message });
+  }
+
+  const enrichedBatch = enrichTrialBatch(batch);
+  res.json({
+    plan: result.data,
+    updatedBatch: enrichedBatch
+  });
+});
+
+router.post('/retest-plans/:planId/approve-extension', authenticate, requireReviewer, (req, res) => {
+  const planId = parseInt(req.params.planId);
+  const { approvalRemarks } = req.body;
+
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ message: '复测计划不存在' });
+
+  const batch = store.trialBatches.find(b => b.id === plan.trialBatchId);
+  if (!batch) return res.status(404).json({ message: '关联的试制批号不存在' });
+
+  const approver = store.users.find(u => u.id === req.user.id);
+  const result = approveExtension(
+    planId,
+    req.user.id,
+    approver ? approver.name : '',
+    approvalRemarks || ''
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ message: result.message });
+  }
+
+  const enrichedBatch = enrichTrialBatch(batch);
+  res.json({
+    plan: result.data,
+    updatedBatch: enrichedBatch
+  });
+});
+
+router.post('/retest-plans/:planId/reject-extension', authenticate, requireReviewer, (req, res) => {
+  const planId = parseInt(req.params.planId);
+  const { rejectReason } = req.body;
+
+  if (!rejectReason || rejectReason.trim() === '') {
+    return res.status(400).json({ message: '驳回原因不能为空' });
+  }
+
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ message: '复测计划不存在' });
+
+  const batch = store.trialBatches.find(b => b.id === plan.trialBatchId);
+  if (!batch) return res.status(404).json({ message: '关联的试制批号不存在' });
+
+  const rejecter = store.users.find(u => u.id === req.user.id);
+  const result = rejectExtension(
+    planId,
+    req.user.id,
+    rejecter ? rejecter.name : '',
+    rejectReason
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ message: result.message });
+  }
+
+  const enrichedBatch = enrichTrialBatch(batch);
+  res.json({
+    plan: result.data,
+    updatedBatch: enrichedBatch
+  });
 });
 
 router.get('/retest-plan-stats', authenticate, (req, res) => {

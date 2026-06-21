@@ -19,6 +19,7 @@ module.exports = {
     PENDING: '待确认',
     CONFIRMED: '已确认',
     EXTENDED: '已延期',
+    PENDING_EXTENSION_APPROVAL: '待延期审批',
     COMPLETED: '已完成',
     CANCELLED: '已取消'
   },
