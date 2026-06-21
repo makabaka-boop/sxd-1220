@@ -230,6 +230,18 @@ router.post('/retest-plans/:planId/confirm', authenticate, (req, res) => {
   const planId = parseInt(req.params.planId);
   const { remarks } = req.body;
 
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ message: '复测计划不存在' });
+
+  const batch = store.trialBatches.find(b => b.id === plan.trialBatchId);
+  if (!batch) return res.status(404).json({ message: '关联的试制批号不存在' });
+
+  const rp = store.responsiblePersons.find(r => r.id === batch.responsiblePersonId);
+  const isAdmin = req.user.role === 'admin';
+  if (!isAdmin && (!rp || rp.userId !== req.user.id)) {
+    return res.status(403).json({ message: '权限不足，只有该批次责任人或管理员可确认复测计划' });
+  }
+
   const handler = store.users.find(u => u.id === req.user.id);
   const result = confirmRetestPlan(
     planId, 
@@ -254,6 +266,18 @@ router.post('/retest-plans/:planId/extend', authenticate, (req, res) => {
   }
   if (!extensionReason || extensionReason.trim() === '') {
     return res.status(400).json({ message: '延期原因不能为空' });
+  }
+
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return res.status(404).json({ message: '复测计划不存在' });
+
+  const batch = store.trialBatches.find(b => b.id === plan.trialBatchId);
+  if (!batch) return res.status(404).json({ message: '关联的试制批号不存在' });
+
+  const rp = store.responsiblePersons.find(r => r.id === batch.responsiblePersonId);
+  const isAdmin = req.user.role === 'admin';
+  if (!isAdmin && (!rp || rp.userId !== req.user.id)) {
+    return res.status(403).json({ message: '权限不足，只有该批次责任人或管理员可延期复测计划' });
   }
 
   const handler = store.users.find(u => u.id === req.user.id);

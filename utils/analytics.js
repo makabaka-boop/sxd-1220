@@ -309,12 +309,26 @@ function enrichTrialBatch(batch) {
   
   const unresolvedAbnormals = findUnreviewedAbnormals(records, reviews);
   const latestAbnormal = records.find(r => SERIOUS_ABNORMAL_LEVELS.includes(r.abnormalLevel));
-  const nextRetestDate = calculateNextRetestDate(batch, records);
-  const retestStatus = calculateRetestStatus(batch, records);
+  let nextRetestDate = calculateNextRetestDate(batch, records);
+  let retestStatus = calculateRetestStatus(batch, records);
+  const retestPlanInfo = enrichTrialBatchWithRetestPlan(batch);
+
+  if (retestPlanInfo.retestPlan && retestPlanInfo.retestPlan.currentPlanDate) {
+    nextRetestDate = retestPlanInfo.retestPlan.currentPlanDate;
+    const now = new Date();
+    const planDate = new Date(retestPlanInfo.retestPlan.currentPlanDate);
+    const daysUntilDue = Math.ceil((planDate - now) / (1000 * 60 * 60 * 24));
+    retestStatus = {
+      isOverdue: daysUntilDue < 0,
+      isUrgent: daysUntilDue <= 3 && daysUntilDue >= 0,
+      daysUntilDue,
+      overdueDays: daysUntilDue < 0 ? Math.abs(daysUntilDue) : 0
+    };
+  }
+
   const currentAction = determineCurrentAction(batch, records, reviews, retestStatus);
   const riskAssessment = assessRiskLevel(batch, records, reviews, retestStatus);
   const statusHistory = buildStatusHistory(batch, records, reviews);
-  const retestPlanInfo = enrichTrialBatchWithRetestPlan(batch);
 
   const cycle = store.retestCycles.find(c => c.id === batch.retestCycleId);
 
@@ -745,80 +759,88 @@ function buildLifecycleTimeline(batchId) {
       review: '复核记录提交'
     };
     
-    timeline.push({
-      type: 'retest_plan_created',
-      title: '复测计划生成',
-      date: plan.createdAt ? plan.createdAt.split('T')[0] : plan.originalPlanDate,
-      description: `复测计划已生成，来源: ${sourceTypeNames[plan.sourceType] || plan.sourceType}，原计划日期: ${plan.originalPlanDate}`,
-      details: {
-        planId: plan.id,
-        sourceType: plan.sourceType,
-        sourceTypeLabel: sourceTypeNames[plan.sourceType] || plan.sourceType,
-        sourceRecordId: plan.sourceRecordId,
-        originalPlanDate: plan.originalPlanDate,
-        currentPlanDate: plan.currentPlanDate,
-        extensionCount: plan.extensionCount,
-        createdAt: plan.createdAt,
-        status: plan.status
-      },
-      status: plan.status === RETEST_PLAN_STATUS.COMPLETED ? 'completed' : 'active'
+    const actions = plan.actions || [];
+    actions.forEach(action => {
+      const actionDate = action.handledAt || plan.createdAt;
+
+      if (action.type === 'created') {
+        timeline.push({
+          type: 'retest_plan_created',
+          title: '复测计划生成',
+          date: actionDate.split('T')[0],
+          description: `复测计划已生成，来源: ${sourceTypeNames[plan.sourceType] || plan.sourceType}，原计划日期: ${plan.originalPlanDate}`,
+          details: {
+            planId: plan.id,
+            sourceType: plan.sourceType,
+            sourceTypeLabel: sourceTypeNames[plan.sourceType] || plan.sourceType,
+            sourceRecordId: plan.sourceRecordId,
+            originalPlanDate: plan.originalPlanDate,
+            currentPlanDate: plan.currentPlanDate,
+            extensionCount: plan.extensionCount,
+            createdAt: plan.createdAt,
+            status: plan.status,
+            createdBy: action.handlerName,
+            createdAtAction: action.handledAt
+          },
+          status: plan.status === RETEST_PLAN_STATUS.COMPLETED ? 'completed' : 'active'
+        });
+      } else if (action.type === 'confirmed') {
+        timeline.push({
+          type: 'retest_plan_confirmed',
+          title: '复测计划已确认',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '责任人'} 确认了复测计划，当前计划日期: ${action.planDate || plan.currentPlanDate}`,
+          details: {
+            planId: plan.id,
+            confirmedBy: action.handlerName,
+            confirmedById: action.handlerId,
+            confirmedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            planDate: action.planDate || plan.currentPlanDate,
+            remarks: action.remarks
+          },
+          status: 'completed'
+        });
+      } else if (action.type === 'extended') {
+        timeline.push({
+          type: 'retest_plan_extended',
+          title: '复测计划已延期',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '责任人'} 将复测计划从 ${action.prevPlanDate} 延期至 ${action.planDate}，延期原因: ${action.reason}`,
+          details: {
+            planId: plan.id,
+            extendedBy: action.handlerName,
+            extendedById: action.handlerId,
+            extendedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            originalPlanDate: plan.originalPlanDate,
+            prevPlanDate: action.prevPlanDate,
+            newPlanDate: action.planDate,
+            extensionCount: plan.extensionCount,
+            extensionReason: action.reason,
+            remarks: action.remarks
+          },
+          status: 'completed'
+        });
+      } else if (action.type === 'completed') {
+        timeline.push({
+          type: 'retest_plan_completed',
+          title: '复测计划已完成',
+          date: actionDate.split('T')[0],
+          description: `${action.handlerName || '责任人'} 完成了复测计划，${action.remarks || plan.remarks || '已提交相关记录'}`,
+          details: {
+            planId: plan.id,
+            completedBy: action.handlerName,
+            completedById: action.handlerId,
+            completedAt: action.handledAt,
+            fromStatus: action.fromStatus,
+            planDate: action.planDate || plan.currentPlanDate,
+            remarks: action.remarks || plan.remarks
+          },
+          status: 'completed'
+        });
+      }
     });
-
-    if (plan.status === RETEST_PLAN_STATUS.CONFIRMED && plan.lastHandledAt) {
-      timeline.push({
-        type: 'retest_plan_confirmed',
-        title: '复测计划已确认',
-        date: plan.lastHandledAt.split('T')[0],
-        description: `${plan.lastHandlerName || '责任人'} 确认了复测计划，当前计划日期: ${plan.currentPlanDate}`,
-        details: {
-          planId: plan.id,
-          confirmedBy: plan.lastHandlerName,
-          confirmedById: plan.lastHandlerId,
-          confirmedAt: plan.lastHandledAt,
-          planDate: plan.currentPlanDate,
-          remarks: plan.remarks
-        },
-        status: 'completed'
-      });
-    }
-
-    if (plan.status === RETEST_PLAN_STATUS.EXTENDED && plan.lastHandledAt) {
-      timeline.push({
-        type: 'retest_plan_extended',
-        title: '复测计划已延期',
-        date: plan.lastHandledAt.split('T')[0],
-        description: `${plan.lastHandlerName || '责任人'} 将复测计划延期至 ${plan.currentPlanDate}，延期原因: ${plan.extensionReason}`,
-        details: {
-          planId: plan.id,
-          extendedBy: plan.lastHandlerName,
-          extendedById: plan.lastHandlerId,
-          extendedAt: plan.lastHandledAt,
-          originalPlanDate: plan.originalPlanDate,
-          newPlanDate: plan.currentPlanDate,
-          extensionCount: plan.extensionCount,
-          extensionReason: plan.extensionReason,
-          remarks: plan.remarks
-        },
-        status: 'completed'
-      });
-    }
-
-    if (plan.status === RETEST_PLAN_STATUS.COMPLETED && plan.lastHandledAt) {
-      timeline.push({
-        type: 'retest_plan_completed',
-        title: '复测计划已完成',
-        date: plan.lastHandledAt.split('T')[0],
-        description: `${plan.lastHandlerName || '责任人'} 完成了复测计划，${plan.remarks || '已提交相关记录'}`,
-        details: {
-          planId: plan.id,
-          completedBy: plan.lastHandlerName,
-          completedById: plan.lastHandlerId,
-          completedAt: plan.lastHandledAt,
-          remarks: plan.remarks
-        },
-        status: 'completed'
-      });
-    }
   });
 
   timeline.sort((a, b) => {
@@ -1192,6 +1214,7 @@ function createRetestPlan(batch, sourceType, sourceRecordId, baseDateStr, handle
     return existingPending;
   }
 
+  const now = new Date().toISOString();
   const plan = {
     id: store.nextId.retestPlan++,
     trialBatchId: batch.id,
@@ -1205,9 +1228,22 @@ function createRetestPlan(batch, sourceType, sourceRecordId, baseDateStr, handle
     extensionReason: '',
     lastHandlerId: handlerId,
     lastHandlerName: handlerName,
-    lastHandledAt: handlerId ? new Date().toISOString() : null,
+    lastHandledAt: handlerId ? now : null,
     remarks: '',
-    createdAt: new Date().toISOString()
+    actions: [
+      {
+        type: 'created',
+        handlerId: handlerId,
+        handlerName: handlerName,
+        handledAt: now,
+        fromStatus: null,
+        toStatus: RETEST_PLAN_STATUS.PENDING,
+        planDate: planDateStr,
+        reason: '',
+        remarks: ''
+      }
+    ],
+    createdAt: now
   };
 
   store.retestPlans.push(plan);
@@ -1249,11 +1285,29 @@ function confirmRetestPlan(planId, handlerId, handlerName, remarks = '') {
   const plan = store.retestPlans.find(p => p.id === planId);
   if (!plan) return { success: false, message: '复测计划不存在' };
 
+  if (plan.status === RETEST_PLAN_STATUS.COMPLETED || plan.status === RETEST_PLAN_STATUS.CANCELLED) {
+    return { success: false, message: '该复测计划已完成或已取消，不可操作' };
+  }
+
+  const now = new Date().toISOString();
+  const prevStatus = plan.status;
   plan.status = RETEST_PLAN_STATUS.CONFIRMED;
   plan.lastHandlerId = handlerId;
   plan.lastHandlerName = handlerName;
-  plan.lastHandledAt = new Date().toISOString();
+  plan.lastHandledAt = now;
   if (remarks) plan.remarks = remarks;
+  if (!plan.actions) plan.actions = [];
+  plan.actions.push({
+    type: 'confirmed',
+    handlerId,
+    handlerName,
+    handledAt: now,
+    fromStatus: prevStatus,
+    toStatus: RETEST_PLAN_STATUS.CONFIRMED,
+    planDate: plan.currentPlanDate,
+    reason: '',
+    remarks: remarks || ''
+  });
 
   return { success: true, data: plan };
 }
@@ -1262,6 +1316,10 @@ function extendRetestPlan(planId, newPlanDate, extensionReason, handlerId, handl
   const { RETEST_PLAN_STATUS } = require('../config');
   const plan = store.retestPlans.find(p => p.id === planId);
   if (!plan) return { success: false, message: '复测计划不存在' };
+
+  if (plan.status === RETEST_PLAN_STATUS.COMPLETED || plan.status === RETEST_PLAN_STATUS.CANCELLED) {
+    return { success: false, message: '该复测计划已完成或已取消，不可操作' };
+  }
 
   if (!newPlanDate) return { success: false, message: '新的计划日期不能为空' };
   if (!extensionReason || extensionReason.trim() === '') {
@@ -1274,14 +1332,30 @@ function extendRetestPlan(planId, newPlanDate, extensionReason, handlerId, handl
     return { success: false, message: '新的计划日期必须晚于当前计划日期' };
   }
 
+  const now = new Date().toISOString();
+  const prevStatus = plan.status;
+  const prevPlanDate = plan.currentPlanDate;
   plan.status = RETEST_PLAN_STATUS.EXTENDED;
   plan.currentPlanDate = newPlanDate;
   plan.extensionCount = (plan.extensionCount || 0) + 1;
   plan.extensionReason = extensionReason;
   plan.lastHandlerId = handlerId;
   plan.lastHandlerName = handlerName;
-  plan.lastHandledAt = new Date().toISOString();
+  plan.lastHandledAt = now;
   if (remarks) plan.remarks = remarks;
+  if (!plan.actions) plan.actions = [];
+  plan.actions.push({
+    type: 'extended',
+    handlerId,
+    handlerName,
+    handledAt: now,
+    fromStatus: prevStatus,
+    toStatus: RETEST_PLAN_STATUS.EXTENDED,
+    prevPlanDate,
+    planDate: newPlanDate,
+    reason: extensionReason,
+    remarks: remarks || ''
+  });
 
   return { success: true, data: plan };
 }
@@ -1293,12 +1367,26 @@ function completeRetestPlan(batchId, handlerId, handlerName, remarks = '') {
       && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED)
   );
 
+  const now = new Date().toISOString();
   activePlans.forEach(plan => {
+    const prevStatus = plan.status;
     plan.status = RETEST_PLAN_STATUS.COMPLETED;
     plan.lastHandlerId = handlerId;
     plan.lastHandlerName = handlerName;
-    plan.lastHandledAt = new Date().toISOString();
+    plan.lastHandledAt = now;
     if (remarks) plan.remarks = remarks;
+    if (!plan.actions) plan.actions = [];
+    plan.actions.push({
+      type: 'completed',
+      handlerId,
+      handlerName,
+      handledAt: now,
+      fromStatus: prevStatus,
+      toStatus: RETEST_PLAN_STATUS.COMPLETED,
+      planDate: plan.currentPlanDate,
+      reason: '',
+      remarks: remarks || ''
+    });
   });
 
   return activePlans;
@@ -1334,38 +1422,42 @@ function getRetestPlanCategoryStats() {
 }
 
 function enrichTrialBatchWithRetestPlan(batch) {
-  const { RETEST_PLAN_CATEGORY } = require('../config');
-  const latestPlan = getLatestRetestPlan(batch.id);
+  const { RETEST_PLAN_STATUS } = require('../config');
   const allPlans = getRetestPlansByBatch(batch.id);
-  const activePlan = allPlans.find(p => {
-    const { RETEST_PLAN_STATUS } = require('../config');
-    return p.status === RETEST_PLAN_STATUS.PENDING 
+  const activePlan = allPlans.find(p =>
+    p.status === RETEST_PLAN_STATUS.PENDING 
       || p.status === RETEST_PLAN_STATUS.CONFIRMED 
-      || p.status === RETEST_PLAN_STATUS.EXTENDED;
-  });
+      || p.status === RETEST_PLAN_STATUS.EXTENDED
+  );
+
+  const targetPlan = activePlan || allPlans[0] || null;
 
   let retestPlanInfo = null;
-  if (activePlan) {
-    const category = categorizeRetestPlan(activePlan);
+  if (targetPlan) {
+    const isActive = !!activePlan;
+    const category = isActive ? categorizeRetestPlan(targetPlan) : null;
     const now = new Date();
-    const planDate = new Date(activePlan.currentPlanDate);
+    const planDate = new Date(targetPlan.currentPlanDate);
     const daysUntilDue = Math.ceil((planDate - now) / (1000 * 60 * 60 * 24));
 
     retestPlanInfo = {
-      planId: activePlan.id,
-      status: activePlan.status,
-      category,
-      originalPlanDate: activePlan.originalPlanDate,
-      currentPlanDate: activePlan.currentPlanDate,
-      extensionCount: activePlan.extensionCount,
-      extensionReason: activePlan.extensionReason,
-      lastHandlerId: activePlan.lastHandlerId,
-      lastHandlerName: activePlan.lastHandlerName,
-      lastHandledAt: activePlan.lastHandledAt,
-      daysUntilDue,
-      overdueDays: daysUntilDue < 0 ? Math.abs(daysUntilDue) : 0,
-      sourceType: activePlan.sourceType,
-      remarks: activePlan.remarks
+      planId: targetPlan.id,
+      status: targetPlan.status,
+      category: category,
+      isActive,
+      originalPlanDate: targetPlan.originalPlanDate,
+      currentPlanDate: targetPlan.currentPlanDate,
+      extensionCount: targetPlan.extensionCount,
+      extensionReason: targetPlan.extensionReason,
+      lastHandlerId: targetPlan.lastHandlerId,
+      lastHandlerName: targetPlan.lastHandlerName,
+      lastHandledAt: targetPlan.lastHandledAt,
+      daysUntilDue: isActive ? daysUntilDue : null,
+      overdueDays: isActive && daysUntilDue < 0 ? Math.abs(daysUntilDue) : 0,
+      sourceType: targetPlan.sourceType,
+      sourceRecordId: targetPlan.sourceRecordId,
+      remarks: targetPlan.remarks,
+      actions: targetPlan.actions || []
     };
   }
 

@@ -321,7 +321,10 @@ function initDefaultData() {
       lastHandlerName: '',
       lastHandledAt: null,
       remarks: '',
-      createdAt: isoDate(-7)
+      actions: [
+        { type: 'created', handlerId: 2, handlerName: '张三', handledAt: isoDate(-7) + 'T08:00:00.000Z', fromStatus: null, toStatus: RETEST_PLAN_STATUS.PENDING, planDate: isoDate(0), reason: '', remarks: '' }
+      ],
+      createdAt: isoDate(-7) + 'T08:00:00.000Z'
     },
     {
       id: store.nextId.retestPlan++,
@@ -336,9 +339,13 @@ function initDefaultData() {
       extensionReason: '实验设备维护，延期复测',
       lastHandlerId: 2,
       lastHandlerName: '张三',
-      lastHandledAt: isoDate(-5),
+      lastHandledAt: isoDate(-5) + 'T10:00:00.000Z',
       remarks: '',
-      createdAt: isoDate(-21)
+      actions: [
+        { type: 'created', handlerId: 2, handlerName: '张三', handledAt: isoDate(-21) + 'T08:00:00.000Z', fromStatus: null, toStatus: RETEST_PLAN_STATUS.PENDING, planDate: isoDate(-7), reason: '', remarks: '' },
+        { type: 'extended', handlerId: 2, handlerName: '张三', handledAt: isoDate(-5) + 'T10:00:00.000Z', fromStatus: RETEST_PLAN_STATUS.PENDING, toStatus: RETEST_PLAN_STATUS.EXTENDED, prevPlanDate: isoDate(-7), planDate: isoDate(-3), reason: '实验设备维护，延期复测', remarks: '' }
+      ],
+      createdAt: isoDate(-21) + 'T08:00:00.000Z'
     },
     {
       id: store.nextId.retestPlan++,
@@ -353,9 +360,13 @@ function initDefaultData() {
       extensionReason: '',
       lastHandlerId: 3,
       lastHandlerName: '李四',
-      lastHandledAt: isoDate(-6),
+      lastHandledAt: isoDate(-6) + 'T09:00:00.000Z',
       remarks: '已确认样品制备完成后复测',
-      createdAt: isoDate(-7)
+      actions: [
+        { type: 'created', handlerId: 1, handlerName: '系统管理员', handledAt: isoDate(-7) + 'T08:00:00.000Z', fromStatus: null, toStatus: RETEST_PLAN_STATUS.PENDING, planDate: isoDate(7), reason: '', remarks: '' },
+        { type: 'confirmed', handlerId: 3, handlerName: '李四', handledAt: isoDate(-6) + 'T09:00:00.000Z', fromStatus: RETEST_PLAN_STATUS.PENDING, toStatus: RETEST_PLAN_STATUS.CONFIRMED, planDate: isoDate(7), reason: '', remarks: '已确认样品制备完成后复测' }
+      ],
+      createdAt: isoDate(-7) + 'T08:00:00.000Z'
     },
     {
       id: store.nextId.retestPlan++,
@@ -372,7 +383,10 @@ function initDefaultData() {
       lastHandlerName: '',
       lastHandledAt: null,
       remarks: '发现异常后需安排复测',
-      createdAt: isoDate(-3)
+      actions: [
+        { type: 'created', handlerId: 3, handlerName: '李四', handledAt: isoDate(-3) + 'T08:00:00.000Z', fromStatus: null, toStatus: RETEST_PLAN_STATUS.PENDING, planDate: isoDate(11), reason: '', remarks: '发现异常后需安排复测' }
+      ],
+      createdAt: isoDate(-3) + 'T08:00:00.000Z'
     },
     {
       id: store.nextId.retestPlan++,
@@ -387,9 +401,13 @@ function initDefaultData() {
       extensionReason: '',
       lastHandlerId: 4,
       lastHandlerName: '王五',
-      lastHandledAt: isoDate(-1),
+      lastHandledAt: isoDate(-1) + 'T10:00:00.000Z',
       remarks: '复核完成，结论通过',
-      createdAt: isoDate(-8)
+      actions: [
+        { type: 'created', handlerId: 4, handlerName: '王五', handledAt: isoDate(-8) + 'T08:00:00.000Z', fromStatus: null, toStatus: RETEST_PLAN_STATUS.PENDING, planDate: isoDate(-1), reason: '', remarks: '' },
+        { type: 'completed', handlerId: 4, handlerName: '王五', handledAt: isoDate(-1) + 'T10:00:00.000Z', fromStatus: RETEST_PLAN_STATUS.PENDING, toStatus: RETEST_PLAN_STATUS.COMPLETED, planDate: isoDate(-1), reason: '', remarks: '复核完成，结论通过' }
+      ],
+      createdAt: isoDate(-8) + 'T08:00:00.000Z'
     }
   );
 }
