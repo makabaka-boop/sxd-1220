@@ -2,7 +2,7 @@ const express = require('express');
 const store = require('../data/store');
 const { authenticate, requireReviewer } = require('../middleware/auth');
 const { STATUS } = require('../config');
-const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus } = require('../utils/analytics');
+const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus, createRetestPlan, completeRetestPlan } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -105,6 +105,19 @@ router.post('/review-records', authenticate, requireReviewer, (req, res) => {
     }
   }
   batch.updatedAt = new Date().toISOString();
+
+  completeRetestPlan(batch.id, req.user.id, reviewer ? reviewer.name : '', `复核结论已提交: ${record.retestResult}`);
+  
+  if (batch.status !== STATUS.READY_SCALEUP && batch.status !== STATUS.SUSPENDED) {
+    createRetestPlan(
+      batch, 
+      'review', 
+      record.id, 
+      record.retestDate, 
+      req.user.id, 
+      reviewer ? reviewer.name : ''
+    );
+  }
 
   const allRecords = store.experimentRecords
     .filter(r => r.trialBatchId === batch.id)

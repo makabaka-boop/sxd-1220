@@ -39,8 +39,21 @@ router.get('/export/csv', authenticate, (req, res) => {
     case 'trial-batches': {
       const batches = filterTrialBatches(req.query);
       const headers = ['id', 'formulaCode', 'batchNumber', 'packagingTypeName', 'observationConditionName', 
-        'responsiblePersonName', 'productionDate', 'status', 'experimentRecordCount', 'reviewRecordCount', 'createdAt'];
-      csvContent = convertToCSV(batches, headers);
+        'responsiblePersonName', 'productionDate', 'status', 'experimentRecordCount', 'reviewRecordCount', 
+        'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate', 
+        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt', 'createdAt'];
+      const enrichedData = batches.map(b => ({
+        ...b,
+        retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
+        retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+        retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
+        retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+        retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
+        retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
+        retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
+        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
+      }));
+      csvContent = convertToCSV(enrichedData, headers);
       fileName = `trial-batches-${date}.csv`;
       break;
     }
@@ -83,12 +96,37 @@ router.get('/export/csv', authenticate, (req, res) => {
       break;
     }
     case 'pending-retest': {
-      const { getPendingRetestBatches } = require('../utils/analytics');
+      const { getPendingRetestBatches, getRetestPlansByBatch } = require('../utils/analytics');
       const data = getPendingRetestBatches();
       const headers = ['trialBatchId', 'batchNumber', 'formulaCode', 'packagingTypeName', 
         'observationConditionName', 'responsiblePersonName', 'status', 'retestCycleName', 'intervalDays',
-        'lastRecordDate', 'scheduledRetestDate', 'daysUntilDue', 'isOverdue', 'overdueDays', 'isUrgent'];
-      csvContent = convertToCSV(data, headers);
+        'lastRecordDate', 'scheduledRetestDate', 'daysUntilDue', 'isOverdue', 'overdueDays', 'isUrgent',
+        'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate',
+        'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt'];
+      const enrichedData = data.map(d => {
+        const plans = getRetestPlansByBatch(d.trialBatchId);
+        const activePlan = plans.find(p => {
+          const { RETEST_PLAN_STATUS } = require('../config');
+          return p.status === RETEST_PLAN_STATUS.PENDING 
+            || p.status === RETEST_PLAN_STATUS.CONFIRMED 
+            || p.status === RETEST_PLAN_STATUS.EXTENDED;
+        });
+        return {
+          ...d,
+          retestPlanStatus: activePlan ? activePlan.status : '',
+          retestPlanCategory: activePlan ? (() => {
+            const { categorizeRetestPlan } = require('../utils/analytics');
+            return categorizeRetestPlan(activePlan) || '';
+          })() : '',
+          retestOriginalPlanDate: activePlan ? activePlan.originalPlanDate : '',
+          retestCurrentPlanDate: activePlan ? activePlan.currentPlanDate : '',
+          retestExtensionCount: activePlan ? activePlan.extensionCount : 0,
+          retestExtensionReason: activePlan ? activePlan.extensionReason : '',
+          retestLastHandlerName: activePlan ? activePlan.lastHandlerName : '',
+          retestLastHandledAt: activePlan ? activePlan.lastHandledAt : ''
+        };
+      });
+      csvContent = convertToCSV(enrichedData, headers);
       fileName = `pending-retest-${date}.csv`;
       break;
     }
@@ -136,7 +174,11 @@ router.get('/export/dashboard/csv', authenticate, (req, res) => {
 
   if (!section || section === 'closure-overview') {
     const closure = getBatchClosureOverview();
-    const data = closure.byResponsiblePerson.map(rp => ({
+    const { getRetestPlanStatsByResponsiblePerson } = require('../utils/analytics');
+    const retestPlanStats = getRetestPlanStatsByResponsiblePerson();
+    const data = closure.byResponsiblePerson.map(rp => {
+      const retestStat = retestPlanStats.find(r => r.responsiblePersonId === rp.responsiblePersonId);
+      return {
       responsiblePersonName: rp.responsiblePersonName,
       totalBatches: rp.totalBatches,
       pendingCount: rp.pendingCount,
@@ -149,13 +191,20 @@ router.get('/export/dashboard/csv', authenticate, (req, res) => {
       overdueRetestCount: rp.overdueRetestCount,
       unreviewedAbnormalCount: rp.unreviewedAbnormalCount,
       highRiskPackagingBatchCount: rp.highRiskPackagingBatchCount,
-      closureRate: rp.closureRate
-    }));
+      closureRate: rp.closureRate,
+      retestPendingCount: retestStat ? retestStat.pendingRetestCount : 0,
+      retestOverdueCount: retestStat ? retestStat.overdueCount : 0,
+      retestExtendedCount: retestStat ? retestStat.extendedCount : 0,
+      retestCompletedCount: retestStat ? retestStat.completedCount : 0
+    };
+    });
     const headers = ['责任人', '总批次数', '待处理数', '待制样', '观察中', '待复测', '异常跟进', 
-      '可放大', '暂停', '复测超期数', '异常未复核数', '高风险批次数', '闭环率'];
+      '可放大', '暂停', '复测超期数', '异常未复核数', '高风险批次数', '闭环率',
+      '复测计划待处理数', '复测计划超期数', '复测计划延期数', '复测计划完成数'];
     const cnHeaders = ['responsiblePersonName', 'totalBatches', 'pendingCount', 'pendingPrep', 
       'observing', 'pendingRetest', 'abnormalFollowup', 'readyScaleup', 'suspended', 
-      'overdueRetestCount', 'unreviewedAbnormalCount', 'highRiskPackagingBatchCount', 'closureRate'];
+      'overdueRetestCount', 'unreviewedAbnormalCount', 'highRiskPackagingBatchCount', 'closureRate',
+      'retestPendingCount', 'retestOverdueCount', 'retestExtendedCount', 'retestCompletedCount'];
     const renamedData = data.map(item => {
       const renamed = {};
       cnHeaders.forEach((h, i) => { renamed[headers[i]] = item[h]; });
@@ -178,13 +227,24 @@ router.get('/export/dashboard/csv', authenticate, (req, res) => {
       overdueDays: b.retestStatus.overdueDays,
       riskLevel: b.riskAssessment.riskLevel,
       currentAction: b.currentAction.action,
-      priority: b.currentAction.priority
+      priority: b.currentAction.priority,
+      retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
+      retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+      retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
+      retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+      retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
+      retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
+      retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
+      retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
     }));
     const headers = ['试制批号', '配方', '包材类型', '观察条件', '责任人', '当前状态', 
-      '下次复测日期', '是否超期', '超期天数', '风险等级', '当前处理动作', '优先级'];
+      '下次复测日期', '是否超期', '超期天数', '风险等级', '当前处理动作', '优先级',
+      '复测计划状态', '复测分类', '原计划日期', '当前计划日期', '延期次数', '延期原因', '最近处理人', '最近处理时间'];
     const cnKeys = ['batchNumber', 'formulaCode', 'packagingTypeName', 'observationConditionName',
       'responsiblePersonName', 'status', 'nextRetestDate', 'isOverdue', 'overdueDays',
-      'riskLevel', 'currentAction', 'priority'];
+      'riskLevel', 'currentAction', 'priority',
+      'retestPlanStatus', 'retestPlanCategory', 'retestOriginalPlanDate', 'retestCurrentPlanDate',
+      'retestExtensionCount', 'retestExtensionReason', 'retestLastHandlerName', 'retestLastHandledAt'];
     const renamedData = data.map(item => {
       const renamed = {};
       cnKeys.forEach((k, i) => { renamed[headers[i]] = item[k]; });

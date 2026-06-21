@@ -12,6 +12,7 @@ const store = {
   trialBatches: [],
   experimentRecords: [],
   reviewRecords: [],
+  retestPlans: [],
   nextId: {
     user: 1,
     formula: 1,
@@ -22,7 +23,8 @@ const store = {
     retestCycle: 1,
     trialBatch: 1,
     experimentRecord: 1,
-    reviewRecord: 1
+    reviewRecord: 1,
+    retestPlan: 1
   }
 };
 
@@ -298,6 +300,96 @@ function initDefaultData() {
       reviewerName: '王五',
       remarks: '经多轮稳定性测试，各项指标均在合格范围内，可进入放大阶段',
       createdAt: isoDate(-1)
+    }
+  );
+
+  const { RETEST_PLAN_STATUS } = require('../config');
+
+  store.retestPlans.push(
+    {
+      id: store.nextId.retestPlan++,
+      trialBatchId: 1,
+      trialBatchNumber: 'TR-001',
+      sourceType: 'experiment',
+      sourceRecordId: 2,
+      originalPlanDate: isoDate(0),
+      currentPlanDate: isoDate(0),
+      status: RETEST_PLAN_STATUS.PENDING,
+      extensionCount: 0,
+      extensionReason: '',
+      lastHandlerId: null,
+      lastHandlerName: '',
+      lastHandledAt: null,
+      remarks: '',
+      createdAt: isoDate(-7)
+    },
+    {
+      id: store.nextId.retestPlan++,
+      trialBatchId: 2,
+      trialBatchNumber: 'TR-002',
+      sourceType: 'experiment',
+      sourceRecordId: 3,
+      originalPlanDate: isoDate(-7),
+      currentPlanDate: isoDate(-3),
+      status: RETEST_PLAN_STATUS.EXTENDED,
+      extensionCount: 1,
+      extensionReason: '实验设备维护，延期复测',
+      lastHandlerId: 2,
+      lastHandlerName: '张三',
+      lastHandledAt: isoDate(-5),
+      remarks: '',
+      createdAt: isoDate(-21)
+    },
+    {
+      id: store.nextId.retestPlan++,
+      trialBatchId: 3,
+      trialBatchNumber: 'TR-003',
+      sourceType: 'creation',
+      sourceRecordId: null,
+      originalPlanDate: isoDate(7),
+      currentPlanDate: isoDate(7),
+      status: RETEST_PLAN_STATUS.CONFIRMED,
+      extensionCount: 0,
+      extensionReason: '',
+      lastHandlerId: 3,
+      lastHandlerName: '李四',
+      lastHandledAt: isoDate(-6),
+      remarks: '已确认样品制备完成后复测',
+      createdAt: isoDate(-7)
+    },
+    {
+      id: store.nextId.retestPlan++,
+      trialBatchId: 4,
+      trialBatchNumber: 'TR-004',
+      sourceType: 'experiment',
+      sourceRecordId: 5,
+      originalPlanDate: isoDate(11),
+      currentPlanDate: isoDate(11),
+      status: RETEST_PLAN_STATUS.PENDING,
+      extensionCount: 0,
+      extensionReason: '',
+      lastHandlerId: null,
+      lastHandlerName: '',
+      lastHandledAt: null,
+      remarks: '发现异常后需安排复测',
+      createdAt: isoDate(-3)
+    },
+    {
+      id: store.nextId.retestPlan++,
+      trialBatchId: 5,
+      trialBatchNumber: 'TR-005',
+      sourceType: 'review',
+      sourceRecordId: 1,
+      originalPlanDate: isoDate(-1),
+      currentPlanDate: isoDate(-1),
+      status: RETEST_PLAN_STATUS.COMPLETED,
+      extensionCount: 0,
+      extensionReason: '',
+      lastHandlerId: 4,
+      lastHandlerName: '王五',
+      lastHandledAt: isoDate(-1),
+      remarks: '复核完成，结论通过',
+      createdAt: isoDate(-8)
     }
   );
 }

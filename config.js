@@ -15,5 +15,17 @@ module.exports = {
     READY_SCALEUP: '可放大',
     SUSPENDED: '暂停'
   },
+  RETEST_PLAN_STATUS: {
+    PENDING: '待确认',
+    CONFIRMED: '已确认',
+    EXTENDED: '已延期',
+    COMPLETED: '已完成',
+    CANCELLED: '已取消'
+  },
+  RETEST_PLAN_CATEGORY: {
+    OVERDUE: '已超期',
+    UPCOMING: '临近到期',
+    NORMAL: '正常待复测'
+  },
   ABNORMAL_LEVELS: ['正常', '轻微', '中等', '严重', '致命']
 };

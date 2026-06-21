@@ -43,7 +43,11 @@ app.get('/', (req, res) => {
         updateStatus: 'PATCH /api/trial-batches/:id/status',
         delete: 'DELETE /api/trial-batches/:id (admin)',
         statuses: 'GET /api/statuses',
-        pendingBatches: 'GET /api/pending-batches (待处理批次，支持多维度筛选)'
+        pendingBatches: 'GET /api/pending-batches (待处理批次，支持多维度筛选，支持按复测状态筛选: retestCategory=已超期/临近到期/正常待复测)',
+        retestPlans: 'GET /api/trial-batches/:id/retest-plans (获取批次复测计划历史)',
+        confirmRetestPlan: 'POST /api/retest-plans/:planId/confirm (确认复测计划)',
+        extendRetestPlan: 'POST /api/retest-plans/:planId/extend (延期复测计划)',
+        retestPlanStats: 'GET /api/retest-plan-stats (复测计划分类统计)'
       },
       experiment: {
         list: 'GET /api/experiment-records (支持筛选)',

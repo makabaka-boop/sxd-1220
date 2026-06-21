@@ -314,6 +314,7 @@ function enrichTrialBatch(batch) {
   const currentAction = determineCurrentAction(batch, records, reviews, retestStatus);
   const riskAssessment = assessRiskLevel(batch, records, reviews, retestStatus);
   const statusHistory = buildStatusHistory(batch, records, reviews);
+  const retestPlanInfo = enrichTrialBatchWithRetestPlan(batch);
 
   const cycle = store.retestCycles.find(c => c.id === batch.retestCycleId);
 
@@ -331,7 +332,10 @@ function enrichTrialBatch(batch) {
     retestStatus,
     currentAction,
     riskAssessment,
-    retestCycleName: cycle ? cycle.name : null
+    retestCycleName: cycle ? cycle.name : null,
+    retestPlan: retestPlanInfo.retestPlan,
+    retestPlanHistory: retestPlanInfo.retestPlanHistory,
+    retestPlanCount: retestPlanInfo.retestPlanCount
   };
 }
 
@@ -732,18 +736,116 @@ function buildLifecycleTimeline(batchId) {
     });
   }
 
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const retestPlans = getRetestPlansByBatch(batchId);
+  retestPlans.forEach(plan => {
+    const sourceTypeNames = {
+      creation: '批次建档',
+      experiment: '实验记录提交',
+      review: '复核记录提交'
+    };
+    
+    timeline.push({
+      type: 'retest_plan_created',
+      title: '复测计划生成',
+      date: plan.createdAt ? plan.createdAt.split('T')[0] : plan.originalPlanDate,
+      description: `复测计划已生成，来源: ${sourceTypeNames[plan.sourceType] || plan.sourceType}，原计划日期: ${plan.originalPlanDate}`,
+      details: {
+        planId: plan.id,
+        sourceType: plan.sourceType,
+        sourceTypeLabel: sourceTypeNames[plan.sourceType] || plan.sourceType,
+        sourceRecordId: plan.sourceRecordId,
+        originalPlanDate: plan.originalPlanDate,
+        currentPlanDate: plan.currentPlanDate,
+        extensionCount: plan.extensionCount,
+        createdAt: plan.createdAt,
+        status: plan.status
+      },
+      status: plan.status === RETEST_PLAN_STATUS.COMPLETED ? 'completed' : 'active'
+    });
+
+    if (plan.status === RETEST_PLAN_STATUS.CONFIRMED && plan.lastHandledAt) {
+      timeline.push({
+        type: 'retest_plan_confirmed',
+        title: '复测计划已确认',
+        date: plan.lastHandledAt.split('T')[0],
+        description: `${plan.lastHandlerName || '责任人'} 确认了复测计划，当前计划日期: ${plan.currentPlanDate}`,
+        details: {
+          planId: plan.id,
+          confirmedBy: plan.lastHandlerName,
+          confirmedById: plan.lastHandlerId,
+          confirmedAt: plan.lastHandledAt,
+          planDate: plan.currentPlanDate,
+          remarks: plan.remarks
+        },
+        status: 'completed'
+      });
+    }
+
+    if (plan.status === RETEST_PLAN_STATUS.EXTENDED && plan.lastHandledAt) {
+      timeline.push({
+        type: 'retest_plan_extended',
+        title: '复测计划已延期',
+        date: plan.lastHandledAt.split('T')[0],
+        description: `${plan.lastHandlerName || '责任人'} 将复测计划延期至 ${plan.currentPlanDate}，延期原因: ${plan.extensionReason}`,
+        details: {
+          planId: plan.id,
+          extendedBy: plan.lastHandlerName,
+          extendedById: plan.lastHandlerId,
+          extendedAt: plan.lastHandledAt,
+          originalPlanDate: plan.originalPlanDate,
+          newPlanDate: plan.currentPlanDate,
+          extensionCount: plan.extensionCount,
+          extensionReason: plan.extensionReason,
+          remarks: plan.remarks
+        },
+        status: 'completed'
+      });
+    }
+
+    if (plan.status === RETEST_PLAN_STATUS.COMPLETED && plan.lastHandledAt) {
+      timeline.push({
+        type: 'retest_plan_completed',
+        title: '复测计划已完成',
+        date: plan.lastHandledAt.split('T')[0],
+        description: `${plan.lastHandlerName || '责任人'} 完成了复测计划，${plan.remarks || '已提交相关记录'}`,
+        details: {
+          planId: plan.id,
+          completedBy: plan.lastHandlerName,
+          completedById: plan.lastHandlerId,
+          completedAt: plan.lastHandledAt,
+          remarks: plan.remarks
+        },
+        status: 'completed'
+      });
+    }
+  });
+
   timeline.sort((a, b) => {
     const dateA = new Date(a.date);
     const dateB = new Date(b.date);
     if (dateA.getTime() !== dateB.getTime()) return dateA - dateB;
-    const typeOrder = { creation: 0, status_change: 1, experiment: 2, abnormal: 3, review: 4, status: 5, scheduled: 6 };
-    return (typeOrder[a.type] || 9) - (typeOrder[b.type] || 9);
+    const typeOrder = { 
+      creation: 0, 
+      status_change: 1, 
+      experiment: 2, 
+      abnormal: 3, 
+      review: 4, 
+      retest_plan_created: 5,
+      retest_plan_confirmed: 6,
+      retest_plan_extended: 7,
+      retest_plan_completed: 8,
+      status: 9, 
+      scheduled: 10 
+    };
+    return (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99);
   });
 
   return timeline.map((item, idx) => ({ ...item, id: idx + 1 }));
 }
 
 function getPendingBatches(filters = {}) {
+  const { RETEST_PLAN_CATEGORY } = require('../config');
   let results = [...store.trialBatches];
 
   if (filters.responsiblePersonId) {
@@ -782,6 +884,21 @@ function getPendingBatches(filters = {}) {
     results = results.filter(b => {
       const enriched = enrichTrialBatch(b);
       return enriched.retestStatus.isOverdue;
+    });
+  }
+
+  if (filters.retestCategory) {
+    results = results.filter(b => {
+      const plans = getRetestPlansByBatch(b.id);
+      const { RETEST_PLAN_STATUS } = require('../config');
+      const activePlan = plans.find(p => 
+        p.status === RETEST_PLAN_STATUS.PENDING 
+        || p.status === RETEST_PLAN_STATUS.CONFIRMED 
+        || p.status === RETEST_PLAN_STATUS.EXTENDED
+      );
+      if (!activePlan) return false;
+      const category = categorizeRetestPlan(activePlan);
+      return category === filters.retestCategory;
     });
   }
 
@@ -824,11 +941,23 @@ function getPendingBatches(filters = {}) {
     }
   });
 
+  const retestCategoryGroups = {
+    [RETEST_PLAN_CATEGORY.OVERDUE]: 0,
+    [RETEST_PLAN_CATEGORY.UPCOMING]: 0,
+    [RETEST_PLAN_CATEGORY.NORMAL]: 0
+  };
+  enrichedResults.forEach(b => {
+    if (b.retestPlan && b.retestPlan.category) {
+      retestCategoryGroups[b.retestPlan.category]++;
+    }
+  });
+
   return {
     total: enrichedResults.length,
     data: enrichedResults,
     statusDistribution: statusGroups,
     riskDistribution: riskGroups,
+    retestCategoryDistribution: retestCategoryGroups,
     overdueCount: enrichedResults.filter(b => b.retestStatus.isOverdue).length,
     unreviewedAbnormalCount: enrichedResults.filter(b => b.unresolvedAbnormalCount > 0).length
   };
@@ -938,6 +1067,8 @@ function getBatchClosureOverview() {
 
 function generateDashboardExportData() {
   const closureOverview = getBatchClosureOverview();
+  const retestPlanStats = getRetestPlanStatsByResponsiblePerson();
+  const retestCategoryStats = getRetestPlanCategoryStats();
   const pendingBatches = getPendingBatches({});
   
   const highRiskPackaging = getHighRiskPackaging();
@@ -948,14 +1079,37 @@ function generateDashboardExportData() {
     batchTimelines[b.id] = buildLifecycleTimeline(b.id);
   });
 
+  const mergedClosure = closureOverview.byResponsiblePerson.map(rp => {
+    const retestStat = retestPlanStats.find(r => r.responsiblePersonId === rp.responsiblePersonId);
+    return {
+      ...rp,
+      pendingRetestCount: retestStat ? retestStat.pendingRetestCount : 0,
+      retestOverdueCount: retestStat ? retestStat.overdueCount : 0,
+      retestExtendedCount: retestStat ? retestStat.extendedCount : 0,
+      retestCompletedCount: retestStat ? retestStat.completedCount : 0,
+      totalRetestPlanCount: retestStat ? retestStat.totalPlanCount : 0
+    };
+  });
+
   return {
     exportedAt: new Date().toISOString(),
     module: '批次稳定性跟踪看板',
-    closureOverview,
+    closureOverview: {
+      summary: {
+        ...closureOverview.summary,
+        totalPendingRetest: retestPlanStats.reduce((sum, r) => sum + r.pendingRetestCount, 0),
+        totalRetestOverdue: retestPlanStats.reduce((sum, r) => sum + r.overdueCount, 0),
+        totalRetestExtended: retestPlanStats.reduce((sum, r) => sum + r.extendedCount, 0)
+      },
+      byResponsiblePerson: mergedClosure
+    },
+    retestPlanStats: retestCategoryStats,
+    retestPlanByResponsible: retestPlanStats,
     pendingBatches: {
       total: pendingBatches.total,
       statusDistribution: pendingBatches.statusDistribution,
       riskDistribution: pendingBatches.riskDistribution,
+      retestCategoryDistribution: pendingBatches.retestCategoryDistribution,
       overdueCount: pendingBatches.overdueCount,
       unreviewedAbnormalCount: pendingBatches.unreviewedAbnormalCount,
       batches: pendingBatches.data.map(b => ({
@@ -969,7 +1123,15 @@ function generateDashboardExportData() {
         nextRetestDate: b.nextRetestDate,
         riskLevel: b.riskAssessment.riskLevel,
         currentAction: b.currentAction.action,
-        currentActionPriority: b.currentAction.priority
+        currentActionPriority: b.currentAction.priority,
+        retestPlanStatus: b.retestPlan ? b.retestPlan.status : '',
+        retestPlanCategory: b.retestPlan ? b.retestPlan.category : '',
+        retestOriginalPlanDate: b.retestPlan ? b.retestPlan.originalPlanDate : '',
+        retestCurrentPlanDate: b.retestPlan ? b.retestPlan.currentPlanDate : '',
+        retestExtensionCount: b.retestPlan ? b.retestPlan.extensionCount : 0,
+        retestExtensionReason: b.retestPlan ? b.retestPlan.extensionReason : '',
+        retestLastHandlerName: b.retestPlan ? b.retestPlan.lastHandlerName : '',
+        retestLastHandledAt: b.retestPlan ? b.retestPlan.lastHandledAt : ''
       }))
     },
     highRiskPackaging: highRiskPackaging.slice(0, 10),
@@ -993,19 +1155,277 @@ function generateExportData(type = 'full') {
     trialBatches: store.trialBatches.map(b => ({
       ...b,
       records: store.experimentRecords.filter(r => r.trialBatchId === b.id),
-      reviews: store.reviewRecords.filter(r => r.trialBatchId === b.id)
+      reviews: store.reviewRecords.filter(r => r.trialBatchId === b.id),
+      retestPlans: getRetestPlansByBatch(b.id)
     })),
+    retestPlans: store.retestPlans,
     analysis: {
       highRiskPackaging: getHighRiskPackaging(),
       pendingRetestBatches: getPendingRetestBatches(),
       stabilityTrendByFormula: getStabilityTrend('formula'),
       stabilityTrendByPackaging: getStabilityTrend('packaging'),
-      batchClosureOverview: getBatchClosureOverview()
+      batchClosureOverview: getBatchClosureOverview(),
+      retestPlanStats: getRetestPlanCategoryStats(),
+      retestPlanByResponsible: getRetestPlanStatsByResponsiblePerson()
     },
     dashboard: generateDashboardExportData()
   };
 
   return exportData;
+}
+
+function createRetestPlan(batch, sourceType, sourceRecordId, baseDateStr, handlerId = null, handlerName = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const cycle = store.retestCycles.find(c => c.id === batch.retestCycleId);
+  if (!cycle) return null;
+
+  const baseDate = new Date(baseDateStr);
+  const planDate = new Date(baseDate);
+  planDate.setDate(planDate.getDate() + cycle.intervalDays);
+  const planDateStr = planDate.toISOString().split('T')[0];
+
+  const existingPending = store.retestPlans.find(
+    p => p.trialBatchId === batch.id 
+      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED)
+  );
+  if (existingPending) {
+    return existingPending;
+  }
+
+  const plan = {
+    id: store.nextId.retestPlan++,
+    trialBatchId: batch.id,
+    trialBatchNumber: batch.batchNumber,
+    sourceType,
+    sourceRecordId,
+    originalPlanDate: planDateStr,
+    currentPlanDate: planDateStr,
+    status: RETEST_PLAN_STATUS.PENDING,
+    extensionCount: 0,
+    extensionReason: '',
+    lastHandlerId: handlerId,
+    lastHandlerName: handlerName,
+    lastHandledAt: handlerId ? new Date().toISOString() : null,
+    remarks: '',
+    createdAt: new Date().toISOString()
+  };
+
+  store.retestPlans.push(plan);
+  return plan;
+}
+
+function getRetestPlansByBatch(batchId) {
+  return store.retestPlans
+    .filter(p => p.trialBatchId === batchId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function getLatestRetestPlan(batchId) {
+  const plans = getRetestPlansByBatch(batchId);
+  return plans.length > 0 ? plans[0] : null;
+}
+
+function categorizeRetestPlan(plan) {
+  const { RETEST_PLAN_CATEGORY, RETEST_PLAN_STATUS } = require('../config');
+  const now = new Date();
+  const planDate = new Date(plan.currentPlanDate);
+  const daysUntilDue = Math.ceil((planDate - now) / (1000 * 60 * 60 * 24));
+
+  if (plan.status === RETEST_PLAN_STATUS.COMPLETED || plan.status === RETEST_PLAN_STATUS.CANCELLED) {
+    return null;
+  }
+
+  if (daysUntilDue < 0) {
+    return RETEST_PLAN_CATEGORY.OVERDUE;
+  } else if (daysUntilDue <= 3) {
+    return RETEST_PLAN_CATEGORY.UPCOMING;
+  } else {
+    return RETEST_PLAN_CATEGORY.NORMAL;
+  }
+}
+
+function confirmRetestPlan(planId, handlerId, handlerName, remarks = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return { success: false, message: '复测计划不存在' };
+
+  plan.status = RETEST_PLAN_STATUS.CONFIRMED;
+  plan.lastHandlerId = handlerId;
+  plan.lastHandlerName = handlerName;
+  plan.lastHandledAt = new Date().toISOString();
+  if (remarks) plan.remarks = remarks;
+
+  return { success: true, data: plan };
+}
+
+function extendRetestPlan(planId, newPlanDate, extensionReason, handlerId, handlerName, remarks = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const plan = store.retestPlans.find(p => p.id === planId);
+  if (!plan) return { success: false, message: '复测计划不存在' };
+
+  if (!newPlanDate) return { success: false, message: '新的计划日期不能为空' };
+  if (!extensionReason || extensionReason.trim() === '') {
+    return { success: false, message: '延期原因不能为空' };
+  }
+
+  const newDate = new Date(newPlanDate);
+  const currentDate = new Date(plan.currentPlanDate);
+  if (newDate <= currentDate) {
+    return { success: false, message: '新的计划日期必须晚于当前计划日期' };
+  }
+
+  plan.status = RETEST_PLAN_STATUS.EXTENDED;
+  plan.currentPlanDate = newPlanDate;
+  plan.extensionCount = (plan.extensionCount || 0) + 1;
+  plan.extensionReason = extensionReason;
+  plan.lastHandlerId = handlerId;
+  plan.lastHandlerName = handlerName;
+  plan.lastHandledAt = new Date().toISOString();
+  if (remarks) plan.remarks = remarks;
+
+  return { success: true, data: plan };
+}
+
+function completeRetestPlan(batchId, handlerId, handlerName, remarks = '') {
+  const { RETEST_PLAN_STATUS } = require('../config');
+  const activePlans = store.retestPlans.filter(
+    p => p.trialBatchId === batchId 
+      && (p.status === RETEST_PLAN_STATUS.PENDING || p.status === RETEST_PLAN_STATUS.CONFIRMED || p.status === RETEST_PLAN_STATUS.EXTENDED)
+  );
+
+  activePlans.forEach(plan => {
+    plan.status = RETEST_PLAN_STATUS.COMPLETED;
+    plan.lastHandlerId = handlerId;
+    plan.lastHandlerName = handlerName;
+    plan.lastHandledAt = new Date().toISOString();
+    if (remarks) plan.remarks = remarks;
+  });
+
+  return activePlans;
+}
+
+function getRetestPlanCategoryStats() {
+  const { RETEST_PLAN_CATEGORY, RETEST_PLAN_STATUS } = require('../config');
+  const stats = {
+    [RETEST_PLAN_CATEGORY.OVERDUE]: 0,
+    [RETEST_PLAN_CATEGORY.UPCOMING]: 0,
+    [RETEST_PLAN_CATEGORY.NORMAL]: 0,
+    total: 0,
+    completed: 0,
+    extended: 0
+  };
+
+  store.retestPlans.forEach(plan => {
+    if (plan.status === RETEST_PLAN_STATUS.COMPLETED) {
+      stats.completed++;
+      return;
+    }
+    if (plan.status === RETEST_PLAN_STATUS.EXTENDED) {
+      stats.extended++;
+    }
+    const category = categorizeRetestPlan(plan);
+    if (category) {
+      stats[category]++;
+      stats.total++;
+    }
+  });
+
+  return stats;
+}
+
+function enrichTrialBatchWithRetestPlan(batch) {
+  const { RETEST_PLAN_CATEGORY } = require('../config');
+  const latestPlan = getLatestRetestPlan(batch.id);
+  const allPlans = getRetestPlansByBatch(batch.id);
+  const activePlan = allPlans.find(p => {
+    const { RETEST_PLAN_STATUS } = require('../config');
+    return p.status === RETEST_PLAN_STATUS.PENDING 
+      || p.status === RETEST_PLAN_STATUS.CONFIRMED 
+      || p.status === RETEST_PLAN_STATUS.EXTENDED;
+  });
+
+  let retestPlanInfo = null;
+  if (activePlan) {
+    const category = categorizeRetestPlan(activePlan);
+    const now = new Date();
+    const planDate = new Date(activePlan.currentPlanDate);
+    const daysUntilDue = Math.ceil((planDate - now) / (1000 * 60 * 60 * 24));
+
+    retestPlanInfo = {
+      planId: activePlan.id,
+      status: activePlan.status,
+      category,
+      originalPlanDate: activePlan.originalPlanDate,
+      currentPlanDate: activePlan.currentPlanDate,
+      extensionCount: activePlan.extensionCount,
+      extensionReason: activePlan.extensionReason,
+      lastHandlerId: activePlan.lastHandlerId,
+      lastHandlerName: activePlan.lastHandlerName,
+      lastHandledAt: activePlan.lastHandledAt,
+      daysUntilDue,
+      overdueDays: daysUntilDue < 0 ? Math.abs(daysUntilDue) : 0,
+      sourceType: activePlan.sourceType,
+      remarks: activePlan.remarks
+    };
+  }
+
+  return {
+    retestPlan: retestPlanInfo,
+    retestPlanHistory: allPlans,
+    retestPlanCount: allPlans.length
+  };
+}
+
+function getRetestPlanStatsByResponsiblePerson() {
+  const { RETEST_PLAN_STATUS, RETEST_PLAN_CATEGORY } = require('../config');
+  const stats = {};
+
+  store.trialBatches.forEach(batch => {
+    const rpId = batch.responsiblePersonId;
+    if (!rpId) return;
+
+    if (!stats[rpId]) {
+      stats[rpId] = {
+        responsiblePersonId: rpId,
+        responsiblePersonName: batch.responsiblePersonName,
+        pendingRetestCount: 0,
+        overdueCount: 0,
+        extendedCount: 0,
+        completedCount: 0,
+        totalPlanCount: 0,
+        batches: []
+      };
+    }
+
+    const plans = getRetestPlansByBatch(batch.id);
+    stats[rpId].totalPlanCount += plans.length;
+
+    plans.forEach(plan => {
+      if (plan.status === RETEST_PLAN_STATUS.COMPLETED) {
+        stats[rpId].completedCount++;
+      } else if (plan.status === RETEST_PLAN_STATUS.EXTENDED) {
+        stats[rpId].extendedCount++;
+      }
+      
+      const category = categorizeRetestPlan(plan);
+      if (category === RETEST_PLAN_CATEGORY.OVERDUE) {
+        stats[rpId].overdueCount++;
+        stats[rpId].pendingRetestCount++;
+      } else if (category === RETEST_PLAN_CATEGORY.UPCOMING || category === RETEST_PLAN_CATEGORY.NORMAL) {
+        stats[rpId].pendingRetestCount++;
+      }
+    });
+
+    if (plans.length > 0) {
+      stats[rpId].batches.push({
+        batchNumber: batch.batchNumber,
+        formulaCode: batch.formulaCode,
+        status: batch.status
+      });
+    }
+  });
+
+  return Object.values(stats).sort((a, b) => b.overdueCount - a.overdueCount);
 }
 
 module.exports = {
@@ -1022,5 +1442,15 @@ module.exports = {
   getPendingBatches,
   getBatchClosureOverview,
   generateDashboardExportData,
-  generateExportData
+  generateExportData,
+  createRetestPlan,
+  getRetestPlansByBatch,
+  getLatestRetestPlan,
+  categorizeRetestPlan,
+  confirmRetestPlan,
+  extendRetestPlan,
+  completeRetestPlan,
+  getRetestPlanCategoryStats,
+  enrichTrialBatchWithRetestPlan,
+  getRetestPlanStatsByResponsiblePerson
 };

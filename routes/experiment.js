@@ -2,7 +2,7 @@ const express = require('express');
 const store = require('../data/store');
 const { authenticate, requireExperimenter } = require('../middleware/auth');
 const { STATUS, ABNORMAL_LEVELS } = require('../config');
-const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus } = require('../utils/analytics');
+const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus, createRetestPlan, completeRetestPlan } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -88,6 +88,16 @@ router.post('/experiment-records', authenticate, requireExperimenter, (req, res)
     batch.status = STATUS.OBSERVING;
   }
   batch.updatedAt = new Date().toISOString();
+
+  completeRetestPlan(batch.id, req.user.id, experimenter ? experimenter.name : '', `实验记录已提交: ${recordDate}`);
+  createRetestPlan(
+    batch, 
+    'experiment', 
+    record.id, 
+    record.recordDate, 
+    req.user.id, 
+    experimenter ? experimenter.name : ''
+  );
 
   const allRecords = store.experimentRecords
     .filter(r => r.trialBatchId === batch.id)

@@ -1,9 +1,9 @@
 const express = require('express');
 const store = require('../data/store');
 const { authenticate, requireAdmin } = require('../middleware/auth');
-const { STATUS, ABNORMAL_LEVELS } = require('../config');
+const { STATUS, ABNORMAL_LEVELS, RETEST_PLAN_STATUS } = require('../config');
 const { validateDuplicateTrialBatch } = require('../utils/validators');
-const { filterTrialBatches, enrichTrialBatch, buildLifecycleTimeline, getPendingBatches } = require('../utils/analytics');
+const { filterTrialBatches, enrichTrialBatch, buildLifecycleTimeline, getPendingBatches, createRetestPlan, getRetestPlansByBatch, confirmRetestPlan, extendRetestPlan, completeRetestPlan, getRetestPlanCategoryStats } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -96,6 +96,17 @@ router.post('/trial-batches', authenticate, (req, res) => {
   };
 
   store.trialBatches.push(batch);
+
+  const creator = store.users.find(u => u.id === req.user.id);
+  const retestPlan = createRetestPlan(
+    batch, 
+    'creation', 
+    null, 
+    batch.productionDate, 
+    req.user.id, 
+    creator ? creator.name : ''
+  );
+
   res.status(201).json(enrichTrialBatch(batch));
 });
 
@@ -198,8 +209,73 @@ router.get('/pending-batches', authenticate, (req, res) => {
 router.get('/statuses', authenticate, (req, res) => {
   res.json({
     statuses: VALID_STATUSES,
-    abnormalLevels: ABNORMAL_LEVELS
+    abnormalLevels: ABNORMAL_LEVELS,
+    retestPlanStatuses: Object.values(RETEST_PLAN_STATUS)
   });
+});
+
+router.get('/trial-batches/:id/retest-plans', authenticate, (req, res) => {
+  const id = parseInt(req.params.id);
+  const batch = store.trialBatches.find(b => b.id === id);
+  if (!batch) return res.status(404).json({ message: '试制批号不存在' });
+
+  const plans = getRetestPlansByBatch(id);
+  res.json({
+    total: plans.length,
+    data: plans
+  });
+});
+
+router.post('/retest-plans/:planId/confirm', authenticate, (req, res) => {
+  const planId = parseInt(req.params.planId);
+  const { remarks } = req.body;
+
+  const handler = store.users.find(u => u.id === req.user.id);
+  const result = confirmRetestPlan(
+    planId, 
+    req.user.id, 
+    handler ? handler.name : '',
+    remarks || ''
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ message: result.message });
+  }
+
+  res.json(result.data);
+});
+
+router.post('/retest-plans/:planId/extend', authenticate, (req, res) => {
+  const planId = parseInt(req.params.planId);
+  const { newPlanDate, extensionReason, remarks } = req.body;
+
+  if (!newPlanDate) {
+    return res.status(400).json({ message: '新的计划日期不能为空' });
+  }
+  if (!extensionReason || extensionReason.trim() === '') {
+    return res.status(400).json({ message: '延期原因不能为空' });
+  }
+
+  const handler = store.users.find(u => u.id === req.user.id);
+  const result = extendRetestPlan(
+    planId,
+    newPlanDate,
+    extensionReason,
+    req.user.id,
+    handler ? handler.name : '',
+    remarks || ''
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ message: result.message });
+  }
+
+  res.json(result.data);
+});
+
+router.get('/retest-plan-stats', authenticate, (req, res) => {
+  const stats = getRetestPlanCategoryStats();
+  res.json(stats);
 });
 
 module.exports = router;
