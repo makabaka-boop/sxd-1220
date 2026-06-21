@@ -1,7 +1,7 @@
 const express = require('express');
 const { authenticate } = require('../middleware/auth');
 const { runAllValidations, detectPackagingAbnormalCluster, detectRetestOverdue, detectMissingKeyReadings, detectAbnormalWithoutConclusion, detectResponsibleBacklog } = require('../utils/validators');
-const { getHighRiskPackaging, getPendingRetestBatches, getStabilityTrend } = require('../utils/analytics');
+const { getHighRiskPackaging, getPendingRetestBatches, getStabilityTrend, getBatchClosureOverview, getPendingBatches } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -63,6 +63,37 @@ router.get('/stability-trend', authenticate, (req, res) => {
     groupBy,
     total: result.length,
     data: result
+  });
+});
+
+router.get('/batch-closure-overview', authenticate, (req, res) => {
+  const result = getBatchClosureOverview();
+  res.json(result);
+});
+
+router.get('/batch-tracking-dashboard', authenticate, (req, res) => {
+  const closureOverview = getBatchClosureOverview();
+  const pendingBatches = getPendingBatches(req.query);
+  const validations = runAllValidations();
+
+  res.json({
+    summary: closureOverview.summary,
+    closureOverview: closureOverview.byResponsiblePerson,
+    pendingBatches: {
+      total: pendingBatches.total,
+      statusDistribution: pendingBatches.statusDistribution,
+      riskDistribution: pendingBatches.riskDistribution,
+      overdueCount: pendingBatches.overdueCount,
+      unreviewedAbnormalCount: pendingBatches.unreviewedAbnormalCount,
+      data: pendingBatches.data.slice(0, 50)
+    },
+    alerts: {
+      retestOverdue: validations.retestOverdue.detected ? validations.retestOverdue.overdueBatches.length : 0,
+      packagingAbnormalCluster: validations.packagingAbnormalCluster.detected ? validations.packagingAbnormalCluster.highRiskPackaging.length : 0,
+      missingReadings: validations.missingKeyReadings.detected ? validations.missingKeyReadings.missingRecords.length : 0,
+      abnormalNoConclusion: validations.abnormalWithoutConclusion.detected ? validations.abnormalWithoutConclusion.pendingConclusion.length : 0,
+      responsibleBacklog: validations.responsibleBacklog.detected ? validations.responsibleBacklog.backlogResponsibles.length : 0
+    }
   });
 });
 

@@ -2,6 +2,7 @@ const express = require('express');
 const store = require('../data/store');
 const { authenticate, requireReviewer } = require('../middleware/auth');
 const { STATUS } = require('../config');
+const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -99,7 +100,29 @@ router.post('/review-records', authenticate, requireReviewer, (req, res) => {
   }
   batch.updatedAt = new Date().toISOString();
 
-  res.status(201).json({ ...record, updatedBatchStatus: batch.status });
+  const allRecords = store.experimentRecords
+    .filter(r => r.trialBatchId === batch.id)
+    .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+  const allReviews = store.reviewRecords
+    .filter(r => r.trialBatchId === batch.id)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const nextRetestDate = calculateNextRetestDate(batch, allRecords);
+  const retestStatus = calculateRetestStatus(batch, allRecords);
+  const currentAction = determineCurrentAction(batch, allRecords, allReviews, retestStatus);
+  const riskAssessment = assessRiskLevel(batch, allRecords, allReviews, retestStatus);
+
+  res.status(201).json({ 
+    ...record, 
+    updatedBatch: {
+      id: batch.id,
+      status: batch.status,
+      nextRetestDate,
+      retestStatus,
+      currentAction,
+      riskAssessment,
+      updatedAt: batch.updatedAt
+    }
+  });
 });
 
 router.put('/review-records/:id', authenticate, requireReviewer, (req, res) => {
@@ -149,7 +172,30 @@ router.put('/review-records/:id', authenticate, requireReviewer, (req, res) => {
       batch.status = STATUS.OBSERVING;
     }
     batch.updatedAt = new Date().toISOString();
-    res.json({ ...record, updatedBatchStatus: batch.status });
+
+    const allRecords = store.experimentRecords
+      .filter(r => r.trialBatchId === batch.id)
+      .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+    const allReviews = store.reviewRecords
+      .filter(r => r.trialBatchId === batch.id)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const nextRetestDate = calculateNextRetestDate(batch, allRecords);
+    const retestStatus = calculateRetestStatus(batch, allRecords);
+    const currentAction = determineCurrentAction(batch, allRecords, allReviews, retestStatus);
+    const riskAssessment = assessRiskLevel(batch, allRecords, allReviews, retestStatus);
+
+    res.json({ 
+      ...record, 
+      updatedBatch: {
+        id: batch.id,
+        status: batch.status,
+        nextRetestDate,
+        retestStatus,
+        currentAction,
+        riskAssessment,
+        updatedAt: batch.updatedAt
+      }
+    });
   } else {
     res.json(record);
   }

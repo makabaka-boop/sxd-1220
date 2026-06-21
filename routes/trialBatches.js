@@ -3,7 +3,7 @@ const store = require('../data/store');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 const { STATUS, ABNORMAL_LEVELS } = require('../config');
 const { validateDuplicateTrialBatch } = require('../utils/validators');
-const { filterTrialBatches, enrichTrialBatch } = require('../utils/analytics');
+const { filterTrialBatches, enrichTrialBatch, buildLifecycleTimeline, getPendingBatches } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -30,10 +30,13 @@ router.get('/trial-batches/:id', authenticate, (req, res) => {
     .filter(r => r.trialBatchId === id)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+  const lifecycleTimeline = buildLifecycleTimeline(id);
+
   res.json({
     ...enrichTrialBatch(batch),
     experimentRecords: records,
-    reviewRecords: reviews
+    reviewRecords: reviews,
+    lifecycleTimeline
   });
 });
 
@@ -185,6 +188,11 @@ router.delete('/trial-batches/:id', authenticate, requireAdmin, (req, res) => {
   store.trialBatches.splice(idx, 1);
   
   res.json({ message: '删除成功，已同步删除关联的实验记录和复核记录' });
+});
+
+router.get('/pending-batches', authenticate, (req, res) => {
+  const result = getPendingBatches(req.query);
+  res.json(result);
 });
 
 router.get('/statuses', authenticate, (req, res) => {

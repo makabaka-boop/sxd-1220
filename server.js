@@ -37,12 +37,13 @@ app.get('/', (req, res) => {
       },
       trialBatches: {
         list: 'GET /api/trial-batches (支持筛选)',
-        detail: 'GET /api/trial-batches/:id',
+        detail: 'GET /api/trial-batches/:id (含生命周期时间线)',
         create: 'POST /api/trial-batches',
         update: 'PUT /api/trial-batches/:id',
         updateStatus: 'PATCH /api/trial-batches/:id/status',
         delete: 'DELETE /api/trial-batches/:id (admin)',
-        statuses: 'GET /api/statuses'
+        statuses: 'GET /api/statuses',
+        pendingBatches: 'GET /api/pending-batches (待处理批次，支持多维度筛选)'
       },
       experiment: {
         list: 'GET /api/experiment-records (支持筛选)',
@@ -61,6 +62,8 @@ app.get('/', (req, res) => {
       },
       analytics: {
         dashboard: 'GET /api/analytics/dashboard',
+        batchTrackingDashboard: 'GET /api/analytics/batch-tracking-dashboard (批次稳定性跟踪看板)',
+        batchClosureOverview: 'GET /api/analytics/batch-closure-overview (批次闭环概览-按责任人)',
         validations: 'GET /api/analytics/validations',
         packagingAbnormal: 'GET /api/analytics/validations/packaging-abnormal-cluster',
         retestOverdue: 'GET /api/analytics/validations/retest-overdue',
@@ -79,7 +82,9 @@ app.get('/', (req, res) => {
         csvReview: 'GET /api/export/csv?section=review-records',
         csvHighRiskPackaging: 'GET /api/export/csv?section=high-risk-packaging',
         csvPendingRetest: 'GET /api/export/csv?section=pending-retest',
-        csvFull: 'GET /api/export/csv'
+        csvFull: 'GET /api/export/csv',
+        dashboardJson: 'GET /api/export/dashboard/json (看板数据JSON导出)',
+        dashboardCsv: 'GET /api/export/dashboard/csv (看板数据CSV导出)'
       }
     },
     defaultAccounts: [

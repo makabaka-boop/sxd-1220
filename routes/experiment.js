@@ -2,6 +2,7 @@ const express = require('express');
 const store = require('../data/store');
 const { authenticate, requireExperimenter } = require('../middleware/auth');
 const { STATUS, ABNORMAL_LEVELS } = require('../config');
+const { enrichTrialBatch, calculateNextRetestDate, determineCurrentAction, assessRiskLevel, calculateRetestStatus } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -88,7 +89,27 @@ router.post('/experiment-records', authenticate, requireExperimenter, (req, res)
   }
   batch.updatedAt = new Date().toISOString();
 
-  res.status(201).json({ ...record, updatedBatchStatus: batch.status });
+  const allRecords = store.experimentRecords
+    .filter(r => r.trialBatchId === batch.id)
+    .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+  const allReviews = store.reviewRecords.filter(r => r.trialBatchId === batch.id);
+  const nextRetestDate = calculateNextRetestDate(batch, allRecords);
+  const retestStatus = calculateRetestStatus(batch, allRecords);
+  const currentAction = determineCurrentAction(batch, allRecords, allReviews, retestStatus);
+  const riskAssessment = assessRiskLevel(batch, allRecords, allReviews, retestStatus);
+
+  res.status(201).json({ 
+    ...record, 
+    updatedBatch: {
+      id: batch.id,
+      status: batch.status,
+      nextRetestDate,
+      retestStatus,
+      currentAction,
+      riskAssessment,
+      updatedAt: batch.updatedAt
+    }
+  });
 });
 
 router.put('/experiment-records/:id', authenticate, requireExperimenter, (req, res) => {

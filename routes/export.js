@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticate, requireAdmin } = require('../middleware/auth');
-const { generateExportData, filterTrialBatches } = require('../utils/analytics');
+const { generateExportData, filterTrialBatches, generateDashboardExportData, getBatchClosureOverview, getPendingBatches, buildLifecycleTimeline } = require('../utils/analytics');
 
 const router = express.Router();
 
@@ -116,6 +116,122 @@ router.get('/export/csv', authenticate, (req, res) => {
   res.send(csvContent);
 });
 
+router.get('/export/dashboard/json', authenticate, (req, res) => {
+  const dashboardData = generateDashboardExportData();
+  const fileName = `batch-tracking-dashboard-${new Date().toISOString().split('T')[0]}.json`;
+  
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.send(JSON.stringify(dashboardData, null, 2));
+});
+
+router.get('/export/dashboard/csv', authenticate, (req, res) => {
+  const store = require('../data/store');
+  const date = new Date().toISOString().split('T')[0];
+  const { section } = req.query;
+  let csvContent = '';
+  let fileName = '';
+
+  const sections = [];
+
+  if (!section || section === 'closure-overview') {
+    const closure = getBatchClosureOverview();
+    const data = closure.byResponsiblePerson.map(rp => ({
+      responsiblePersonName: rp.responsiblePersonName,
+      totalBatches: rp.totalBatches,
+      pendingCount: rp.pendingCount,
+      pendingPrep: rp.pendingPrep,
+      observing: rp.observing,
+      pendingRetest: rp.pendingRetest,
+      abnormalFollowup: rp.abnormalFollowup,
+      readyScaleup: rp.readyScaleup,
+      suspended: rp.suspended,
+      overdueRetestCount: rp.overdueRetestCount,
+      unreviewedAbnormalCount: rp.unreviewedAbnormalCount,
+      highRiskPackagingBatchCount: rp.highRiskPackagingBatchCount,
+      closureRate: rp.closureRate
+    }));
+    const headers = ['责任人', '总批次数', '待处理数', '待制样', '观察中', '待复测', '异常跟进', 
+      '可放大', '暂停', '复测超期数', '异常未复核数', '高风险批次数', '闭环率'];
+    const cnHeaders = ['responsiblePersonName', 'totalBatches', 'pendingCount', 'pendingPrep', 
+      'observing', 'pendingRetest', 'abnormalFollowup', 'readyScaleup', 'suspended', 
+      'overdueRetestCount', 'unreviewedAbnormalCount', 'highRiskPackagingBatchCount', 'closureRate'];
+    const renamedData = data.map(item => {
+      const renamed = {};
+      cnHeaders.forEach((h, i) => { renamed[headers[i]] = item[h]; });
+      return renamed;
+    });
+    sections.push({ title: '======= 批次闭环概览 =======', data: renamedData, headers });
+  }
+
+  if (!section || section === 'pending-batches') {
+    const pending = getPendingBatches({});
+    const data = pending.data.map(b => ({
+      batchNumber: b.batchNumber,
+      formulaCode: b.formulaCode,
+      packagingTypeName: b.packagingTypeName,
+      observationConditionName: b.observationConditionName,
+      responsiblePersonName: b.responsiblePersonName,
+      status: b.status,
+      nextRetestDate: b.nextRetestDate || '',
+      isOverdue: b.retestStatus.isOverdue ? '是' : '否',
+      overdueDays: b.retestStatus.overdueDays,
+      riskLevel: b.riskAssessment.riskLevel,
+      currentAction: b.currentAction.action,
+      priority: b.currentAction.priority
+    }));
+    const headers = ['试制批号', '配方', '包材类型', '观察条件', '责任人', '当前状态', 
+      '下次复测日期', '是否超期', '超期天数', '风险等级', '当前处理动作', '优先级'];
+    const cnKeys = ['batchNumber', 'formulaCode', 'packagingTypeName', 'observationConditionName',
+      'responsiblePersonName', 'status', 'nextRetestDate', 'isOverdue', 'overdueDays',
+      'riskLevel', 'currentAction', 'priority'];
+    const renamedData = data.map(item => {
+      const renamed = {};
+      cnKeys.forEach((k, i) => { renamed[headers[i]] = item[k]; });
+      return renamed;
+    });
+    sections.push({ title: '\n\n======= 待处理批次列表 =======', data: renamedData, headers });
+  }
+
+  if (!section || section === 'batch-timeline') {
+    const storeLocal = require('../data/store');
+    const allTimelineItems = [];
+    storeLocal.trialBatches.forEach(batch => {
+      const timeline = buildLifecycleTimeline(batch.id);
+      timeline.forEach(item => {
+        allTimelineItems.push({
+          batchNumber: batch.batchNumber,
+          formulaCode: batch.formulaCode,
+          itemType: item.type,
+          title: item.title,
+          date: item.date,
+          description: item.description,
+          status: item.status
+        });
+      });
+    });
+    const headers = ['试制批号', '配方', '事件类型', '事件标题', '日期', '描述', '状态'];
+    const cnKeys = ['batchNumber', 'formulaCode', 'itemType', 'title', 'date', 'description', 'status'];
+    const renamedData = allTimelineItems.map(item => {
+      const renamed = {};
+      cnKeys.forEach((k, i) => { renamed[headers[i]] = item[k]; });
+      return renamed;
+    });
+    sections.push({ title: '\n\n======= 批次生命周期时间线 =======', data: renamedData, headers });
+  }
+
+  csvContent = '\uFEFF';
+  sections.forEach(s => {
+    csvContent += s.title + '\n';
+    csvContent += convertToCSV(s.data, s.headers).replace(/^\uFEFF/, '');
+  });
+  fileName = `dashboard-export-${date}.csv`;
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.send(csvContent);
+});
+
 router.get('/export/summary', authenticate, (req, res) => {
   const store = require('../data/store');
   const summary = {
@@ -140,7 +256,9 @@ router.get('/export/summary', authenticate, (req, res) => {
         { url: '/api/export/csv?section=review-records', description: '复核记录CSV导出' },
         { url: '/api/export/csv?section=high-risk-packaging', description: '高风险包材CSV导出' },
         { url: '/api/export/csv?section=pending-retest', description: '待复测批号CSV导出' },
-        { url: '/api/export/csv', description: '全量CSV导出(多Sheet)' }
+        { url: '/api/export/csv', description: '全量CSV导出(多Sheet)' },
+        { url: '/api/export/dashboard/json', description: '批次稳定性跟踪看板JSON导出' },
+        { url: '/api/export/dashboard/csv', description: '批次稳定性跟踪看板CSV导出' }
       ]
     }
   };
