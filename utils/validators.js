@@ -25,31 +25,40 @@ function detectPackagingAbnormalCluster() {
       packagingRecords[pkgId] = {
         packagingTypeId: pkgId,
         packagingTypeName: batch.packagingTypeName,
-        abnormalCount: 0,
-        totalCount: 0,
-        trialBatches: []
+        abnormalBatchCount: 0,
+        abnormalRecordCount: 0,
+        totalBatchCount: 0,
+        abnormalBatches: []
       };
     }
-    packagingRecords[pkgId].abnormalCount++;
-    if (!packagingRecords[pkgId].trialBatches.includes(batch.batchNumber)) {
-      packagingRecords[pkgId].trialBatches.push(batch.batchNumber);
+    packagingRecords[pkgId].abnormalRecordCount++;
+    if (!packagingRecords[pkgId].abnormalBatches.some(b => b.batchNumber === batch.batchNumber)) {
+      packagingRecords[pkgId].abnormalBatches.push({
+        batchNumber: batch.batchNumber,
+        formulaCode: batch.formulaCode,
+        abnormalLevel: rec.abnormalLevel
+      });
     }
   });
 
   store.trialBatches.forEach(batch => {
     const pkgId = batch.packagingTypeId;
     if (packagingRecords[pkgId]) {
-      packagingRecords[pkgId].totalCount++;
+      packagingRecords[pkgId].totalBatchCount++;
     }
   });
 
   const highRisk = Object.values(packagingRecords)
-    .filter(p => p.abnormalCount >= 2 || (p.totalCount > 0 && p.abnormalCount / p.totalCount >= 0.3))
+    .map(p => {
+      p.abnormalBatchCount = p.abnormalBatches.length;
+      return p;
+    })
+    .filter(p => p.abnormalBatchCount >= 2 || (p.totalBatchCount > 0 && p.abnormalBatchCount / p.totalBatchCount >= 0.3))
     .map(p => ({
       ...p,
-      riskRate: p.totalCount > 0 ? (p.abnormalCount / p.totalCount * 100).toFixed(1) + '%' : 'N/A'
+      riskRate: p.totalBatchCount > 0 ? (p.abnormalBatchCount / p.totalBatchCount * 100).toFixed(1) + '%' : 'N/A'
     }))
-    .sort((a, b) => b.abnormalCount - a.abnormalCount);
+    .sort((a, b) => b.abnormalBatchCount - a.abnormalBatchCount);
 
   return {
     detected: highRisk.length > 0,

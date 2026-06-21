@@ -53,6 +53,10 @@ router.post('/trial-batches', authenticate, (req, res) => {
     return res.status(400).json({ message: dupCheck.message });
   }
 
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ message: '无效状态，可选值: ' + VALID_STATUSES.join(', ') });
+  }
+
   const formula = store.formulas.find(f => f.id === parseInt(formulaId));
   const packaging = store.packagingTypes.find(p => p.id === parseInt(packagingTypeId));
   const condition = store.observationConditions.find(o => o.id === parseInt(observationConditionId));
@@ -103,8 +107,10 @@ router.put('/trial-batches/:id', authenticate, (req, res) => {
     productionDate, status, remarks
   } = req.body;
 
-  if (formulaId && batchNumber) {
-    const dupCheck = validateDuplicateTrialBatch(parseInt(formulaId), batchNumber, id);
+  if (formulaId || batchNumber) {
+    const effectiveFormulaId = formulaId ? parseInt(formulaId) : batch.formulaId;
+    const effectiveBatchNumber = batchNumber || batch.batchNumber;
+    const dupCheck = validateDuplicateTrialBatch(effectiveFormulaId, effectiveBatchNumber, id);
     if (!dupCheck.valid) {
       return res.status(400).json({ message: dupCheck.message });
     }

@@ -135,7 +135,24 @@ router.put('/review-records/:id', authenticate, requireReviewer, (req, res) => {
   if (releaseRecommendation) record.releaseRecommendation = releaseRecommendation;
   if (remarks !== undefined) record.remarks = remarks;
 
-  res.json(record);
+  const batch = store.trialBatches.find(b => b.id === record.trialBatchId);
+  if (batch) {
+    const effResult = record.retestResult;
+    const effRec = record.releaseRecommendation;
+    if (effRec === '建议放大生产' && effResult === '通过') {
+      batch.status = STATUS.READY_SCALEUP;
+    } else if (effRec === '建议暂停' || effRec === '建议终止') {
+      batch.status = STATUS.SUSPENDED;
+    } else if (effRec === '需改进后继续' || effResult === '有条件通过') {
+      batch.status = STATUS.PENDING_RETEST;
+    } else if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
+      batch.status = STATUS.OBSERVING;
+    }
+    batch.updatedAt = new Date().toISOString();
+    res.json({ ...record, updatedBatchStatus: batch.status });
+  } else {
+    res.json(record);
+  }
 });
 
 router.delete('/review-records/:id', authenticate, requireReviewer, (req, res) => {
