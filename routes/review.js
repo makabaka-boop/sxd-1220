@@ -89,14 +89,20 @@ router.post('/review-records', authenticate, requireReviewer, (req, res) => {
 
   store.reviewRecords.push(record);
 
-  if (releaseRecommendation === '建议放大生产' && retestResult === '通过') {
-    batch.status = STATUS.READY_SCALEUP;
-  } else if (releaseRecommendation === '建议暂停' || releaseRecommendation === '建议终止') {
-    batch.status = STATUS.SUSPENDED;
-  } else if (releaseRecommendation === '需改进后继续' || retestResult === '有条件通过') {
-    batch.status = STATUS.PENDING_RETEST;
-  } else if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
-    batch.status = STATUS.OBSERVING;
+  const effectiveResult = record.retestResult;
+  const effectiveRecommendation = record.releaseRecommendation;
+  const conclusiveResults = ['通过', '有条件通过', '不通过'];
+
+  if (conclusiveResults.includes(effectiveResult)) {
+    if (effectiveRecommendation === '建议放大生产' && effectiveResult === '通过') {
+      batch.status = STATUS.READY_SCALEUP;
+    } else if (effectiveRecommendation === '建议暂停' || effectiveRecommendation === '建议终止') {
+      batch.status = STATUS.SUSPENDED;
+    } else if (effectiveRecommendation === '需改进后继续' || effectiveResult === '有条件通过') {
+      batch.status = STATUS.PENDING_RETEST;
+    } else if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
+      batch.status = STATUS.OBSERVING;
+    }
   }
   batch.updatedAt = new Date().toISOString();
 
@@ -162,14 +168,18 @@ router.put('/review-records/:id', authenticate, requireReviewer, (req, res) => {
   if (batch) {
     const effResult = record.retestResult;
     const effRec = record.releaseRecommendation;
-    if (effRec === '建议放大生产' && effResult === '通过') {
-      batch.status = STATUS.READY_SCALEUP;
-    } else if (effRec === '建议暂停' || effRec === '建议终止') {
-      batch.status = STATUS.SUSPENDED;
-    } else if (effRec === '需改进后继续' || effResult === '有条件通过') {
-      batch.status = STATUS.PENDING_RETEST;
-    } else if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
-      batch.status = STATUS.OBSERVING;
+    const conclusiveResults = ['通过', '有条件通过', '不通过'];
+    
+    if (conclusiveResults.includes(effResult)) {
+      if (effRec === '建议放大生产' && effResult === '通过') {
+        batch.status = STATUS.READY_SCALEUP;
+      } else if (effRec === '建议暂停' || effRec === '建议终止') {
+        batch.status = STATUS.SUSPENDED;
+      } else if (effRec === '需改进后继续' || effResult === '有条件通过') {
+        batch.status = STATUS.PENDING_RETEST;
+      } else if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
+        batch.status = STATUS.OBSERVING;
+      }
     }
     batch.updatedAt = new Date().toISOString();
 

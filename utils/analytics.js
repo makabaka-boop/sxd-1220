@@ -1,6 +1,134 @@
 const store = require('../data/store');
 const { STATUS } = require('../config');
 
+const SERIOUS_ABNORMAL_LEVELS = ['中等', '严重', '致命'];
+const CONCLUSIVE_RETEST_RESULTS = ['通过', '有条件通过', '不通过'];
+
+function isAbnormalRecordResolved(abnormalRecord, reviews) {
+  if (!abnormalRecord || !SERIOUS_ABNORMAL_LEVELS.includes(abnormalRecord.abnormalLevel)) {
+    return true;
+  }
+  const abnormalDate = new Date(abnormalRecord.recordDate);
+  return reviews.some(r => {
+    if (!CONCLUSIVE_RETEST_RESULTS.includes(r.retestResult)) return false;
+    const reviewDate = new Date(r.retestDate || r.createdAt);
+    return reviewDate >= abnormalDate;
+  });
+}
+
+function findUnreviewedAbnormals(records, reviews) {
+  const seriousRecords = records
+    .filter(r => SERIOUS_ABNORMAL_LEVELS.includes(r.abnormalLevel))
+    .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+  return seriousRecords.filter(rec => !isAbnormalRecordResolved(rec, reviews));
+}
+
+function hasUnresolvedAbnormal(records, reviews) {
+  return findUnreviewedAbnormals(records, reviews).length > 0;
+}
+
+function buildStatusHistory(batch, records, reviews) {
+  const history = [];
+  history.push({
+    date: (batch.createdAt || batch.productionDate || '').split('T')[0],
+    from: null,
+    to: batch.status,
+    reason: '批次建档，初始状态',
+    eventType: 'creation'
+  });
+
+  const events = [];
+  records.forEach(r => {
+    events.push({
+      date: new Date(r.recordDate),
+      type: 'experiment',
+      ref: r,
+      rawRecordDate: r.recordDate
+    });
+  });
+  reviews.forEach(r => {
+    events.push({
+      date: new Date(r.retestDate || r.createdAt),
+      type: 'review',
+      ref: r,
+      rawRecordDate: r.retestDate || r.createdAt
+    });
+  });
+  events.sort((a, b) => a.date - b.date);
+
+  let currentStatus = history[0].to;
+
+  events.forEach(evt => {
+    let newStatus = currentStatus;
+    let reason = '';
+
+    if (evt.type === 'experiment') {
+      const r = evt.ref;
+      if (SERIOUS_ABNORMAL_LEVELS.includes(r.abnormalLevel)) {
+        newStatus = STATUS.ABNORMAL_FOLLOWUP;
+        reason = `实验检测到${r.abnormalLevel}异常，进入异常跟进`;
+      } else if (currentStatus === STATUS.PENDING_PREP && r.samplePrepared === true) {
+        newStatus = STATUS.OBSERVING;
+        reason = '首次样品制备完成，进入观察阶段';
+      } else if (currentStatus === STATUS.PENDING_RETEST) {
+        newStatus = STATUS.OBSERVING;
+        reason = '复测完成，返回观察阶段';
+      }
+    } else if (evt.type === 'review') {
+      const r = evt.ref;
+      if (!CONCLUSIVE_RETEST_RESULTS.includes(r.retestResult)) {
+        reason = `复核记录(${r.retestResult})暂未给出明确结论，状态保持`;
+      } else if (r.releaseRecommendation === '建议放大生产' && r.retestResult === '通过') {
+        newStatus = STATUS.READY_SCALEUP;
+        reason = '复核通过，建议放大生产';
+      } else if (r.releaseRecommendation === '建议暂停' || r.releaseRecommendation === '建议终止') {
+        newStatus = STATUS.SUSPENDED;
+        reason = `复核建议${r.releaseRecommendation === '建议暂停' ? '暂停' : '终止'}`;
+      } else if (r.releaseRecommendation === '需改进后继续' || r.retestResult === '有条件通过') {
+        newStatus = STATUS.PENDING_RETEST;
+        reason = `复核结论：${r.releaseRecommendation}，需复测`;
+      } else if (currentStatus === STATUS.ABNORMAL_FOLLOWUP) {
+        newStatus = STATUS.OBSERVING;
+        reason = '异常复核完成，返回观察阶段';
+      }
+    }
+
+    if (newStatus !== currentStatus) {
+      history.push({
+        date: evt.rawRecordDate,
+        from: currentStatus,
+        to: newStatus,
+        reason: reason || (evt.type === 'experiment' ? '实验记录提交' : '复核记录提交'),
+        eventType: evt.type,
+        relatedRecordId: evt.ref.id
+      });
+      currentStatus = newStatus;
+    } else if (reason && history[history.length - 1].reason !== reason) {
+      history.push({
+        date: evt.rawRecordDate,
+        from: currentStatus,
+        to: currentStatus,
+        reason,
+        eventType: evt.type,
+        note: '状态未变',
+        relatedRecordId: evt.ref.id
+      });
+    }
+  });
+
+  if (history[history.length - 1].to !== batch.status) {
+    history.push({
+      date: (batch.updatedAt || '').split('T')[0] || new Date().toISOString().split('T')[0],
+      from: history[history.length - 1].to,
+      to: batch.status,
+      reason: '状态被手动调整',
+      eventType: 'manual'
+    });
+  }
+
+  return history;
+}
+
 function calculateNextRetestDate(batch, records) {
   const cycle = store.retestCycles.find(c => c.id === batch.retestCycleId);
   if (!cycle) return null;
@@ -45,16 +173,17 @@ function determineCurrentAction(batch, records, reviews, retestStatus) {
     return { action: '可放大生产', priority: 'low', description: '该批次稳定性验证通过，可进入放大生产阶段' };
   }
 
-  const latestAbnormal = records.find(r => ['中等', '严重', '致命'].includes(r.abnormalLevel));
-  const hasUnreviewedAbnormal = latestAbnormal && !reviews.some(r => 
-    new Date(r.createdAt) >= new Date(latestAbnormal.createdAt)
-  );
+  const unreviewedAbnormals = findUnreviewedAbnormals(records, reviews);
+  const unresolvedCount = unreviewedAbnormals.length;
 
-  if (batch.status === STATUS.ABNORMAL_FOLLOWUP || hasUnreviewedAbnormal) {
+  if (batch.status === STATUS.ABNORMAL_FOLLOWUP || unresolvedCount > 0) {
+    const highestLevel = unreviewedAbnormals.length > 0
+      ? unreviewedAbnormals[0].abnormalLevel
+      : '未确认';
     return { 
       action: '异常跟进，待复核', 
       priority: 'high', 
-      description: `存在${latestAbnormal ? latestAbnormal.abnormalLevel : '未确认'}异常，需复核员给出结论` 
+      description: `存在${unresolvedCount}条${highestLevel}异常未闭环，需复核员给出明确结论(通过/有条件通过/不通过)` 
     };
   }
 
@@ -89,12 +218,17 @@ function assessRiskLevel(batch, records, reviews, retestStatus) {
   let riskScore = 0;
   const riskFactors = [];
 
-  const latestAbnormal = records.find(r => ['中等', '严重', '致命'].includes(r.abnormalLevel));
-  if (latestAbnormal) {
+  const unreviewedAbnormals = findUnreviewedAbnormals(records, reviews);
+  if (unreviewedAbnormals.length > 0) {
     const levelScores = { '中等': 2, '严重': 3, '致命': 5 };
-    const score = levelScores[latestAbnormal.abnormalLevel] || 0;
-    riskScore += score;
-    riskFactors.push(`异常等级: ${latestAbnormal.abnormalLevel}`);
+    const maxScore = unreviewedAbnormals.reduce((max, r) => {
+      return Math.max(max, levelScores[r.abnormalLevel] || 0);
+    }, 0);
+    riskScore += maxScore;
+    const levels = [...new Set(unreviewedAbnormals.map(r => r.abnormalLevel))].join('、');
+    riskFactors.push(`未闭环异常(${unreviewedAbnormals.length}条): ${levels}`);
+    riskScore += 2;
+    riskFactors.push('异常未闭环');
   }
 
   if (retestStatus.isOverdue) {
@@ -105,17 +239,9 @@ function assessRiskLevel(batch, records, reviews, retestStatus) {
     riskFactors.push('临近复测日期');
   }
 
-  const hasUnreviewedAbnormal = latestAbnormal && !reviews.some(r => 
-    new Date(r.createdAt) >= new Date(latestAbnormal.createdAt)
-  );
-  if (hasUnreviewedAbnormal) {
-    riskScore += 2;
-    riskFactors.push('异常未复核');
-  }
-
-  if (batch.status === STATUS.ABNORMAL_FOLLOWUP) {
+  if (batch.status === STATUS.ABNORMAL_FOLLOWUP && unreviewedAbnormals.length === 0) {
     riskScore += 1;
-    riskFactors.push('异常跟进状态');
+    riskFactors.push('异常跟进状态(待复核记录补充)');
   }
 
   let riskLevel;
@@ -179,13 +305,15 @@ function enrichTrialBatch(batch) {
   
   const reviews = store.reviewRecords
     .filter(r => r.trialBatchId === batch.id)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    .sort((a, b) => new Date(b.retestDate || b.createdAt) - new Date(a.retestDate || a.createdAt));
   
-  const latestAbnormal = records.find(r => ['中等', '严重', '致命'].includes(r.abnormalLevel));
+  const unresolvedAbnormals = findUnreviewedAbnormals(records, reviews);
+  const latestAbnormal = records.find(r => SERIOUS_ABNORMAL_LEVELS.includes(r.abnormalLevel));
   const nextRetestDate = calculateNextRetestDate(batch, records);
   const retestStatus = calculateRetestStatus(batch, records);
   const currentAction = determineCurrentAction(batch, records, reviews, retestStatus);
   const riskAssessment = assessRiskLevel(batch, records, reviews, retestStatus);
+  const statusHistory = buildStatusHistory(batch, records, reviews);
 
   const cycle = store.retestCycles.find(c => c.id === batch.retestCycleId);
 
@@ -196,6 +324,9 @@ function enrichTrialBatch(batch) {
     reviewRecordCount: reviews.length,
     latestReview: reviews[0] || null,
     latestAbnormalLevel: latestAbnormal ? latestAbnormal.abnormalLevel : null,
+    unresolvedAbnormalCount: unresolvedAbnormals.length,
+    unresolvedAbnormals,
+    statusHistory,
     nextRetestDate,
     retestStatus,
     currentAction,
@@ -453,24 +584,29 @@ function buildLifecycleTimeline(batchId) {
 
   const timeline = [];
 
+  const records = store.experimentRecords
+    .filter(r => r.trialBatchId === batchId)
+    .sort((a, b) => new Date(a.recordDate) - new Date(b.recordDate));
+
+  const reviews = store.reviewRecords
+    .filter(r => r.trialBatchId === batchId)
+    .sort((a, b) => new Date(a.retestDate || a.createdAt) - new Date(b.retestDate || b.createdAt));
+
   timeline.push({
     type: 'creation',
     title: '批次建档',
     date: batch.createdAt ? batch.createdAt.split('T')[0] : batch.productionDate,
-    description: `试制批号 ${batch.batchNumber} 建档完成`,
+    description: `试制批号 ${batch.batchNumber} 建档完成，初始状态: ${batch.status}`,
     details: {
       formulaCode: batch.formulaCode,
       packagingTypeName: batch.packagingTypeName,
       observationConditionName: batch.observationConditionName,
       responsiblePersonName: batch.responsiblePersonName,
-      productionDate: batch.productionDate
+      productionDate: batch.productionDate,
+      initialStatus: batch.status
     },
     status: 'completed'
   });
-
-  const records = store.experimentRecords
-    .filter(r => r.trialBatchId === batchId)
-    .sort((a, b) => new Date(a.recordDate) - new Date(b.recordDate));
 
   records.forEach((rec, idx) => {
     const isInitial = idx === 0;
@@ -492,32 +628,42 @@ function buildLifecycleTimeline(batchId) {
       status: 'completed'
     });
 
-    if (['中等', '严重', '致命'].includes(rec.abnormalLevel)) {
+    if (SERIOUS_ABNORMAL_LEVELS.includes(rec.abnormalLevel)) {
+      const resolved = isAbnormalRecordResolved(rec, reviews);
+      const resolvingReview = reviews.find(r => {
+        if (!CONCLUSIVE_RETEST_RESULTS.includes(r.retestResult)) return false;
+        return new Date(r.retestDate || r.createdAt) >= new Date(rec.recordDate);
+      });
       timeline.push({
         type: 'abnormal',
-        title: '异常标记',
+        title: resolved ? `异常已闭环(${rec.abnormalLevel})` : `异常待处理(${rec.abnormalLevel})`,
         date: rec.recordDate,
-        description: `检测到${rec.abnormalLevel}异常: ${rec.suggestedAction || '需进一步评估'}`,
+        description: resolved 
+          ? `检测到${rec.abnormalLevel}异常，已被${resolvingReview ? resolvingReview.reviewerName : '复核'}闭环处理`
+          : `检测到${rec.abnormalLevel}异常: ${rec.suggestedAction || '需复核员给出明确结论(通过/有条件通过/不通过)'}`,
         details: {
           abnormalLevel: rec.abnormalLevel,
           relatedRecordId: rec.id,
-          suggestedAction: rec.suggestedAction
+          suggestedAction: rec.suggestedAction,
+          resolved,
+          resolvedBy: resolvingReview ? resolvingReview.reviewerName : null,
+          resolvedAt: resolvingReview ? (resolvingReview.retestDate || resolvingReview.createdAt) : null,
+          resolution: resolvingReview ? `${resolvingReview.retestResult} - ${resolvingReview.releaseRecommendation}` : null
         },
-        status: 'pending_review'
+        status: resolved ? 'resolved' : 'pending_review'
       });
     }
   });
 
-  const reviews = store.reviewRecords
-    .filter(r => r.trialBatchId === batchId)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
   reviews.forEach(rev => {
+    const isConclusive = CONCLUSIVE_RETEST_RESULTS.includes(rev.retestResult);
     timeline.push({
       type: 'review',
-      title: '复核结论',
+      title: isConclusive ? '复核结论' : '复核记录(待补充结论)',
       date: rev.retestDate,
-      description: `${rev.reviewerName} 复核，结果: ${rev.retestResult}，风险: ${rev.riskLevel}`,
+      description: isConclusive
+        ? `${rev.reviewerName} 复核，结果: ${rev.retestResult}，建议: ${rev.releaseRecommendation}`
+        : `${rev.reviewerName} 暂存复核记录，结果: ${rev.retestResult}(需补充明确结论)`,
       details: {
         reviewId: rev.id,
         retestResult: rev.retestResult,
@@ -526,10 +672,33 @@ function buildLifecycleTimeline(batchId) {
         appearanceStable: rev.appearanceStable,
         viscosityDeviation: rev.viscosityDeviation,
         odorNormal: rev.odorNormal,
-        reviewerName: rev.reviewerName
+        reviewerName: rev.reviewerName,
+        isConclusive
       },
-      status: 'completed'
+      status: isConclusive ? 'completed' : 'incomplete'
     });
+  });
+
+  const statusHistory = buildStatusHistory(batch, records, reviews);
+  let seq = 0;
+  statusHistory.forEach(h => {
+    if (h.from !== h.to || h.eventType === 'manual') {
+      seq++;
+      timeline.push({
+        type: 'status_change',
+        title: `状态变更 #${seq}`,
+        date: h.date,
+        description: `${h.from ? h.from + ' → ' : ''}${h.to} · ${h.reason}${h.note ? ' (' + h.note + ')' : ''}`,
+        details: {
+          from: h.from,
+          to: h.to,
+          reason: h.reason,
+          eventType: h.eventType,
+          relatedRecordId: h.relatedRecordId || null
+        },
+        status: h.to === batch.status ? 'current' : 'completed'
+      });
+    }
   });
 
   timeline.push({
@@ -539,7 +708,8 @@ function buildLifecycleTimeline(batchId) {
     description: `批次当前状态: ${batch.status}`,
     details: {
       currentStatus: batch.status,
-      lastUpdatedAt: batch.updatedAt
+      lastUpdatedAt: batch.updatedAt,
+      unresolvedAbnormalCount: findUnreviewedAbnormals(records, reviews).length
     },
     status: 'current'
   });
@@ -566,7 +736,7 @@ function buildLifecycleTimeline(batchId) {
     const dateA = new Date(a.date);
     const dateB = new Date(b.date);
     if (dateA.getTime() !== dateB.getTime()) return dateA - dateB;
-    const typeOrder = { creation: 0, experiment: 1, abnormal: 2, review: 3, status: 4, scheduled: 5 };
+    const typeOrder = { creation: 0, status_change: 1, experiment: 2, abnormal: 3, review: 4, status: 5, scheduled: 6 };
     return (typeOrder[a.type] || 9) - (typeOrder[b.type] || 9);
   });
 
@@ -604,11 +774,7 @@ function getPendingBatches(filters = {}) {
     results = results.filter(b => {
       const records = store.experimentRecords.filter(r => r.trialBatchId === b.id);
       const reviews = store.reviewRecords.filter(r => r.trialBatchId === b.id);
-      const latestAbnormal = records
-        .filter(r => ['中等', '严重', '致命'].includes(r.abnormalLevel))
-        .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate))[0];
-      if (!latestAbnormal) return false;
-      return !reviews.some(r => new Date(r.createdAt) >= new Date(latestAbnormal.createdAt));
+      return hasUnresolvedAbnormal(records, reviews);
     });
   }
 
@@ -664,15 +830,7 @@ function getPendingBatches(filters = {}) {
     statusDistribution: statusGroups,
     riskDistribution: riskGroups,
     overdueCount: enrichedResults.filter(b => b.retestStatus.isOverdue).length,
-    unreviewedAbnormalCount: enrichedResults.filter(b => {
-      const records = store.experimentRecords.filter(r => r.trialBatchId === b.id);
-      const reviews = store.reviewRecords.filter(r => r.trialBatchId === b.id);
-      const latestAbnormal = records
-        .filter(r => ['中等', '严重', '致命'].includes(r.abnormalLevel))
-        .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate))[0];
-      if (!latestAbnormal) return false;
-      return !reviews.some(r => new Date(r.createdAt) >= new Date(latestAbnormal.createdAt));
-    }).length
+    unreviewedAbnormalCount: enrichedResults.filter(b => b.unresolvedAbnormalCount > 0).length
   };
 }
 
@@ -736,12 +894,7 @@ function getBatchClosureOverview() {
       overview[rpId].overdueRetestCount++;
     }
 
-    const records = store.experimentRecords.filter(r => r.trialBatchId === batch.id);
-    const reviews = store.reviewRecords.filter(r => r.trialBatchId === batch.id);
-    const latestAbnormal = records
-      .filter(r => ['中等', '严重', '致命'].includes(r.abnormalLevel))
-      .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate))[0];
-    if (latestAbnormal && !reviews.some(r => new Date(r.createdAt) >= new Date(latestAbnormal.createdAt))) {
+    if (enriched.unresolvedAbnormalCount > 0) {
       overview[rpId].unreviewedAbnormalCount++;
     }
 

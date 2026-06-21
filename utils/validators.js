@@ -174,21 +174,29 @@ function detectMissingKeyReadings() {
 function detectAbnormalWithoutConclusion() {
   const pendingList = [];
   const seriousLevels = ['中等', '严重', '致命'];
+  const conclusiveResults = ['通过', '有条件通过', '不通过'];
 
   store.trialBatches.forEach(batch => {
-    const hasSeriousAbnormal = store.experimentRecords.some(r => 
-      r.trialBatchId === batch.id && seriousLevels.includes(r.abnormalLevel)
-    );
-    if (!hasSeriousAbnormal) return;
+    if (batch.status === STATUS.READY_SCALEUP || batch.status === STATUS.SUSPENDED) return;
 
-    const hasReview = store.reviewRecords.some(r => r.trialBatchId === batch.id);
-    
-    if (!hasReview && batch.status !== STATUS.READY_SCALEUP && batch.status !== STATUS.SUSPENDED) {
-      const abnormalRecords = store.experimentRecords
-        .filter(r => r.trialBatchId === batch.id && seriousLevels.includes(r.abnormalLevel))
-        .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+    const abnormalRecords = store.experimentRecords
+      .filter(r => r.trialBatchId === batch.id && seriousLevels.includes(r.abnormalLevel))
+      .sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+    if (abnormalRecords.length === 0) return;
 
-      const latest = abnormalRecords[0];
+    const reviews = store.reviewRecords.filter(r => r.trialBatchId === batch.id);
+
+    const unresolved = abnormalRecords.filter(abn => {
+      const abnDate = new Date(abn.recordDate);
+      return !reviews.some(rv => {
+        if (!conclusiveResults.includes(rv.retestResult)) return false;
+        const rvDate = new Date(rv.retestDate || rv.createdAt);
+        return rvDate >= abnDate;
+      });
+    });
+
+    if (unresolved.length > 0) {
+      const latest = unresolved[0];
       const daysSinceAbnormal = Math.floor((new Date() - new Date(latest.recordDate)) / (1000 * 60 * 60 * 24));
 
       pendingList.push({
@@ -198,6 +206,7 @@ function detectAbnormalWithoutConclusion() {
         latestAbnormalDate: latest.recordDate,
         latestAbnormalLevel: latest.abnormalLevel,
         suggestedAction: latest.suggestedAction,
+        unresolvedCount: unresolved.length,
         daysSinceAbnormal,
         status: batch.status
       });
@@ -208,8 +217,8 @@ function detectAbnormalWithoutConclusion() {
     detected: pendingList.length > 0,
     pendingConclusion: pendingList,
     warning: pendingList.length > 0
-      ? `发现${pendingList.length}个异常批号无复核结论`
-      : '所有异常批号均有结论'
+      ? `发现${pendingList.length}个批号存在未闭环异常(共${pendingList.reduce((s,p)=>s+p.unresolvedCount,0)}条)，需复核员给出明确结论(通过/有条件通过/不通过)`
+      : '所有异常批号均已闭环'
   };
 }
 
